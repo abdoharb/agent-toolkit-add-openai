@@ -5,7 +5,7 @@
 > it; `--update` is a triage tool (summary-first, `--diff`/`--only`,
 > exit 0/1); `CHANGELOG.md` carries impact-tagged entries; the first real
 > migration lives in `migrations/01-delivery-contract.md`; and
-> `/toolkit-update` is rendered into scaffolded projects. This file is now
+> `$toolkit-update` is rendered into scaffolded projects. This file is now
 > reference documentation for how it works and why.
 
 `bin/init.sh --update` already does the mechanical half: render the
@@ -58,10 +58,10 @@ toolkit_sha:   79f0e14
 toolkit_tag:   v0.2.0
 scaffolded:    2026-08-26
 project_name:  my-project
-claude_model:  sonnet
+codex_sol_model: gpt-5.6-sol
+codex_terra_model: gpt-5.6-terra
 builder_model: hcnsec/kimi-k2.7-code
 reviewer_model: hcnsec/glm-5.2
-reviewer_fallback_model: sonnet
 tester_model:  hcnsec/deepseek-v4-flash
 test_dir:      e2e
 ```
@@ -187,11 +187,11 @@ kind of machinery this toolkit is right to refuse. The value is the note
 existing at all, so an in-flight task does not silently lack a field that
 `verify-state.sh` will later check for.
 
-## Stage 5 — A `/toolkit-update` command in the target project
+## Stage 5 — A `$toolkit-update` skill in the target project
 
 The AI-assisted merge path the README already gestures at ("hand the diff
 to your AI lead and ask it to reconcile"), made into a real, templated
-command rendered by `init.sh` alongside `feature.md`:
+skill rendered by `init.sh` alongside the `$feature` skill:
 
 1. Read `.agents/.toolkit-version` for the baseline.
 2. Run `bin/init.sh --update` (flags come from the stamp).

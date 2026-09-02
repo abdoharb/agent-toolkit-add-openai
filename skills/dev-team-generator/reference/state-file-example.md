@@ -10,7 +10,7 @@ fill it in per task.
 
 **Status:** draft | spec-approved | in-progress | blocked:question | blocked:spec | in-review | changes-requested | testing | done
 **Owner right now:** planner | implementer | reviewer | tester | lead
-**Implementer for this task:** <role/tool/model — e.g. "senior-dev (claude/sonnet)" or "builder (opencode/kimi-k2.7-code)">
+**Implementer for this task:** <role/tool/model — e.g. "senior_dev (codex/gpt-5.6-terra)" or "builder (opencode/kimi-k2.7-code)">
 **Reviewer for this task:** none yet — set by the lead before dispatching review; a model/vendor independent from the implementer
 **Tester for this task:** none yet — set by the lead before dispatching test
 **Dispatch session id:** none yet — set after the first dispatch call, reused for every later call on this task

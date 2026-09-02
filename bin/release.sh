@@ -52,4 +52,4 @@ ${SUMMARY:-}"
 git push origin "HEAD:main" "$VERSION"
 
 echo "release: tagged and pushed $VERSION"
-echo "release: downstream projects update via: git pull (their toolkit checkout) then /toolkit-update"
+echo "release: downstream projects update via: git pull (their toolkit checkout) then \$toolkit-update"

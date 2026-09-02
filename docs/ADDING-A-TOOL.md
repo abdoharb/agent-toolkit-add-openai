@@ -16,12 +16,12 @@ you want it to also run under some other tool.
 
 1. **Learn the new tool's own agent/rule format first** — don't guess it.
    Find: where it looks for custom agent/rule definitions (a directory
-   convention, like `.claude/agents/` or `.opencode/agent/`), what
+   convention, like `.codex/agents/` or `.opencode/agent/`), what
    frontmatter or config keys it reads (model selection, a permission or
    capability model, a system-prompt field), and how — or whether — it can
    be dispatched non-interactively from a script (OpenCode has `opencode
-   run --attach`; Claude Code subagents are dispatched via the `Agent`/Task
-   tool from a lead session; a given third tool might only support an
+   run --attach`; Codex custom subagents are dispatched via the lead
+   session's multi-agent tool; a given third tool might only support an
    interactive UI, in which case it cannot be a `scripts/oc.sh`-style
    pipeline participant at all — say so rather than forcing the fit).
 2. **Copy the existing single-tool file's actual prose**, not its
@@ -38,7 +38,7 @@ you want it to also run under some other tool.
    role is trusted to do under that tool, not be smoothed over.
 4. **Add it to the scaffolder**: put the new file under
    `templates/<tool>/...` with `__PLACEHOLDER__` tokens matching the
-   existing convention (`__PROJECT_NAME__`, `__CLAUDE_MODEL__`, etc. — add
+   existing convention (`__PROJECT_NAME__`, `__CODEX_SOL_MODEL__`, etc. — add
    a new one to `bin/init.sh`'s `render()` substitution list if this tool
    needs a model flag `init.sh` doesn't already take), then add a `render`
    line for it in `bin/init.sh`.
@@ -46,7 +46,7 @@ you want it to also run under some other tool.
    needs `scripts/oc.sh`), write and template it the same way — see
    `templates/scripts/oc.sh.tmpl` for the shape (session reuse, `--text`
    to avoid inlining raw event streams, exit-code handling for usage-cap
-   errors). `feature.md.tmpl`'s pipeline steps call whichever dispatch
+   errors). The `$feature` skill's pipeline steps call whichever dispatch
    mechanism a given role's tool needs; add the new one there too,
    following the existing `builder`/`senior-dev` two-option pattern in
    step 2.

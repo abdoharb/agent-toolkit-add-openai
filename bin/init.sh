@@ -10,9 +10,9 @@
 #   bin/init.sh --target <path> --project-name <name> \
 #     --builder-model <vendor/model> \
 #     --reviewer-model <vendor/model> \
-#     --reviewer-fallback-model <vendor/model> \
 #     --tester-model <vendor/model> \
-#     [--claude-model sonnet] [--test-dir e2e]
+#     [--codex-sol-model gpt-5.6-sol] \
+#     [--codex-terra-model gpt-5.6-terra] [--test-dir e2e]
 #
 # On a fresh scaffold this also writes .agents/.toolkit-version — a stamp
 # recording the toolkit SHA/tag and every flag used. It is committed (it
@@ -27,7 +27,7 @@
 #       exit 1   drift — differing and/or new upstream files, listed in a
 #                summary first; full hunks only with --diff, one file with
 #                --only <path-substring>. Merge deliberately (or run the
-#                generated /toolkit-update command and let the lead do it),
+#                generated $toolkit-update skill and let the lead do it),
 #                then refresh the stamp:
 #
 #   bin/init.sh --refresh-stamp [--target <path>] [flags]
@@ -49,10 +49,10 @@ TEMPLATES="$TOOLKIT_ROOT/templates"
 
 TARGET=""
 PROJECT_NAME=""
-CLAUDE_MODEL=""
+CODEX_SOL_MODEL=""
+CODEX_TERRA_MODEL=""
 BUILDER_MODEL=""
 REVIEWER_MODEL=""
-REVIEWER_FALLBACK_MODEL=""
 TESTER_MODEL=""
 TEST_DIR=""
 UPDATE=0
@@ -71,10 +71,10 @@ while [ $# -gt 0 ]; do
   case "$1" in
     --target)                  [ $# -ge 2 ] || die "--target needs a value"; TARGET="$2"; shift 2 ;;
     --project-name)             [ $# -ge 2 ] || die "--project-name needs a value"; PROJECT_NAME="$2"; shift 2 ;;
-    --claude-model)              [ $# -ge 2 ] || die "--claude-model needs a value"; CLAUDE_MODEL="$2"; shift 2 ;;
+    --codex-sol-model)            [ $# -ge 2 ] || die "--codex-sol-model needs a value"; CODEX_SOL_MODEL="$2"; shift 2 ;;
+    --codex-terra-model)          [ $# -ge 2 ] || die "--codex-terra-model needs a value"; CODEX_TERRA_MODEL="$2"; shift 2 ;;
     --builder-model)             [ $# -ge 2 ] || die "--builder-model needs a value"; BUILDER_MODEL="$2"; shift 2 ;;
     --reviewer-model)            [ $# -ge 2 ] || die "--reviewer-model needs a value"; REVIEWER_MODEL="$2"; shift 2 ;;
-    --reviewer-fallback-model)   [ $# -ge 2 ] || die "--reviewer-fallback-model needs a value"; REVIEWER_FALLBACK_MODEL="$2"; shift 2 ;;
     --tester-model)              [ $# -ge 2 ] || die "--tester-model needs a value"; TESTER_MODEL="$2"; shift 2 ;;
     --test-dir)                  [ $# -ge 2 ] || die "--test-dir needs a value"; TEST_DIR="$2"; shift 2 ;;
     --update)                    UPDATE=1; shift ;;
@@ -95,7 +95,7 @@ TARGET="$(cd "$TARGET" && pwd)"
 STAMP="$TARGET/.agents/.toolkit-version"
 
 # Keep in sync with the number of check_pair/render lines below.
-RENDER_TOTAL=14
+RENDER_TOTAL=16
 
 write_stamp() {
   local sha tag
@@ -106,10 +106,10 @@ write_stamp() {
     printf 'toolkit_tag:   %s\n' "$tag"
     printf 'scaffolded:    %s\n' "$(date +%F)"
     printf 'project_name:  %s\n' "$PROJECT_NAME"
-    printf 'claude_model:  %s\n' "$CLAUDE_MODEL"
+    printf 'codex_sol_model: %s\n' "$CODEX_SOL_MODEL"
+    printf 'codex_terra_model: %s\n' "$CODEX_TERRA_MODEL"
     printf 'builder_model: %s\n' "$BUILDER_MODEL"
     printf 'reviewer_model: %s\n' "$REVIEWER_MODEL"
-    printf 'reviewer_fallback_model: %s\n' "$REVIEWER_FALLBACK_MODEL"
     printf 'tester_model:  %s\n' "$TESTER_MODEL"
     printf 'test_dir:      %s\n' "$TEST_DIR"
   } > "$STAMP.tmp"
@@ -123,7 +123,8 @@ write_stamp() {
 # without re-typing the original flags and without spurious diff noise.
 
 apply_defaults() {
-  [ -n "$CLAUDE_MODEL" ] || CLAUDE_MODEL="sonnet"
+  [ -n "$CODEX_SOL_MODEL" ] || CODEX_SOL_MODEL="gpt-5.6-sol"
+  [ -n "$CODEX_TERRA_MODEL" ] || CODEX_TERRA_MODEL="gpt-5.6-terra"
   [ -n "$TEST_DIR" ] || TEST_DIR="e2e"
 }
 
@@ -141,14 +142,12 @@ recover_from_target() { # $1 = key
       REPLY="$(sed -n 's/^model: //p' "$TARGET/.opencode/agent/builder.md" | head -1)" ;;
     reviewer_model)
       REPLY="$(sed -n 's/^model: //p' "$TARGET/.opencode/agent/reviewer.md" | head -1)" ;;
-    reviewer_fallback_model)
-      # feature.md: "switch to `__REVIEWER_FALLBACK_MODEL__`"
-      REPLY="$(sed -n 's/.*switch to `\([^`]*\)`.*/\1/p' \
-        "$TARGET/.claude/commands/feature.md" | head -1)" ;;
     tester_model)
       REPLY="$(sed -n 's/^model: //p' "$TARGET/.opencode/agent/tester.md" | head -1)" ;;
-    claude_model)
-      REPLY="$(sed -n 's/^model: //p' "$TARGET/.claude/agents/planner.md" 2>/dev/null | head -1)" ;;
+    codex_sol_model)
+      REPLY="$(sed -n 's/^model = "\([^"]*\)"/\1/p' "$TARGET/.codex/agents/planner.toml" 2>/dev/null | head -1)" ;;
+    codex_terra_model)
+      REPLY="$(sed -n 's/^model = "\([^"]*\)"/\1/p' "$TARGET/.codex/agents/senior-dev.toml" 2>/dev/null | head -1)" ;;
     project_name)
       # team.sh: SESSION="__PROJECT_NAME__"
       REPLY="$(sed -n 's/^SESSION="\(.*\)"/\1/p' \
@@ -164,10 +163,10 @@ if [ "$UPDATE" -eq 1 ]; then
   if [ -f "$STAMP" ]; then
     for spec in \
       "project_name|PROJECT_NAME" \
-      "claude_model|CLAUDE_MODEL" \
+      "codex_sol_model|CODEX_SOL_MODEL" \
+      "codex_terra_model|CODEX_TERRA_MODEL" \
       "builder_model|BUILDER_MODEL" \
       "reviewer_model|REVIEWER_MODEL" \
-      "reviewer_fallback_model|REVIEWER_FALLBACK_MODEL" \
       "tester_model|TESTER_MODEL" \
       "test_dir|TEST_DIR"; do
       key="${spec%%|*}"; var="${spec##*|}"
@@ -185,10 +184,10 @@ if [ "$UPDATE" -eq 1 ]; then
     # explicit-flags error below.
     for spec in \
       "project_name|PROJECT_NAME" \
-      "claude_model|CLAUDE_MODEL" \
+      "codex_sol_model|CODEX_SOL_MODEL" \
+      "codex_terra_model|CODEX_TERRA_MODEL" \
       "builder_model|BUILDER_MODEL" \
       "reviewer_model|REVIEWER_MODEL" \
-      "reviewer_fallback_model|REVIEWER_FALLBACK_MODEL" \
       "tester_model|TESTER_MODEL" \
       "test_dir|TEST_DIR"; do
       key="${spec%%|*}"; var="${spec##*|}"
@@ -199,7 +198,7 @@ if [ "$UPDATE" -eq 1 ]; then
     done
     apply_defaults
     RECOVERED=""
-    for var in PROJECT_NAME BUILDER_MODEL REVIEWER_MODEL REVIEWER_FALLBACK_MODEL TESTER_MODEL; do
+    for var in PROJECT_NAME BUILDER_MODEL REVIEWER_MODEL TESTER_MODEL; do
       [ -n "${!var}" ] && RECOVERED="$RECOVERED ${var}: ${!var}"
     done
     [ -n "$RECOVERED" ] && printf 'init.sh: no stamp — inferred init values from the target%s\n  (verify these, then make it permanent: bin/init.sh --refresh-stamp --target %s)\n' "$RECOVERED" "$TARGET"
@@ -210,7 +209,6 @@ if [ "$UPDATE" -eq 1 ]; then
     "project_name|--project-name" \
     "builder_model|--builder-model" \
     "reviewer_model|--reviewer-model" \
-    "reviewer_fallback_model|--reviewer-fallback-model" \
     "tester_model|--tester-model"; do
     key="${spec%%|*}"; flag="${spec##*|}"
     val=""
@@ -218,16 +216,17 @@ if [ "$UPDATE" -eq 1 ]; then
       project_name)             val="$PROJECT_NAME" ;;
       builder_model)            val="$BUILDER_MODEL" ;;
       reviewer_model)           val="$REVIEWER_MODEL" ;;
-      reviewer_fallback_model)  val="$REVIEWER_FALLBACK_MODEL" ;;
       tester_model)             val="$TESTER_MODEL" ;;
     esac
     [ -n "$val" ] || missing="$missing $flag"
   done
   [ -z "$missing" ] || die "no provenance stamp at $STAMP and these flags are unset:$missing
   (pass them once, exactly as at the original init, or scaffold freshly to get a stamp)"
+  # Stamps written before Codex support do not contain the Sol/Terra keys.
+  # Use the documented defaults instead of rendering empty model values.
+  apply_defaults
 
   if [ "$REFRESH_STAMP" -eq 1 ]; then
-    apply_defaults
     mkdir -p "$(dirname "$STAMP")"
     write_stamp
     printf 'init.sh: refreshed %s\n' "$STAMP"
@@ -238,7 +237,6 @@ else
   [ -n "$PROJECT_NAME" ] || die "--project-name is required"
   [ -n "$BUILDER_MODEL" ] || die "--builder-model is required"
   [ -n "$REVIEWER_MODEL" ] || die "--reviewer-model is required"
-  [ -n "$REVIEWER_FALLBACK_MODEL" ] || die "--reviewer-fallback-model is required"
   [ -n "$TESTER_MODEL" ] || die "--tester-model is required"
 fi
 
@@ -247,16 +245,16 @@ fi
 # decide whether to drop the first-run customization marker and write the
 # provenance stamp.
 FRESH_SCAFFOLD=0
-[ -f "$TARGET/.claude/commands/feature.md" ] || FRESH_SCAFFOLD=1
+[ -f "$TARGET/.agents/skills/feature/SKILL.md" ] || FRESH_SCAFFOLD=1
 
 # The substitution list, built once — a new placeholder gets added here and
 # nowhere else (render()'s two branches used to duplicate it by hand).
 SED_ARGS=(
   -e "s|__PROJECT_NAME__|$PROJECT_NAME|g"
-  -e "s|__CLAUDE_MODEL__|$CLAUDE_MODEL|g"
+  -e "s|__CODEX_SOL_MODEL__|$CODEX_SOL_MODEL|g"
+  -e "s|__CODEX_TERRA_MODEL__|$CODEX_TERRA_MODEL|g"
   -e "s|__BUILDER_MODEL__|$BUILDER_MODEL|g"
   -e "s|__REVIEWER_MODEL__|$REVIEWER_MODEL|g"
-  -e "s|__REVIEWER_FALLBACK_MODEL__|$REVIEWER_FALLBACK_MODEL|g"
   -e "s|__TESTER_MODEL__|$TESTER_MODEL|g"
   -e "s|__TEST_DIR__|$TEST_DIR|g"
 )
@@ -302,10 +300,12 @@ if [ "$UPDATE" -eq 1 ]; then
     rm -f "$tmp"
   }
 
-  check_pair "$TEMPLATES/claude/agents/planner.md.tmpl"    "$TARGET/.claude/agents/planner.md"
-  check_pair "$TEMPLATES/claude/agents/senior-dev.md.tmpl" "$TARGET/.claude/agents/senior-dev.md"
-  check_pair "$TEMPLATES/claude/commands/feature.md.tmpl"  "$TARGET/.claude/commands/feature.md"
-  check_pair "$TEMPLATES/claude/commands/toolkit-update.md.tmpl" "$TARGET/.claude/commands/toolkit-update.md"
+  check_pair "$TEMPLATES/codex/agents/planner.toml.tmpl" "$TARGET/.codex/agents/planner.toml"
+  check_pair "$TEMPLATES/codex/agents/senior-dev.toml.tmpl" "$TARGET/.codex/agents/senior-dev.toml"
+  check_pair "$TEMPLATES/codex/agents/reviewer-fallback.toml.tmpl" "$TARGET/.codex/agents/reviewer-fallback.toml"
+  check_pair "$TEMPLATES/codex/config.toml.tmpl" "$TARGET/.codex/config.toml"
+  check_pair "$TEMPLATES/codex/skills/feature/SKILL.md.tmpl" "$TARGET/.agents/skills/feature/SKILL.md"
+  check_pair "$TEMPLATES/codex/skills/toolkit-update/SKILL.md.tmpl" "$TARGET/.agents/skills/toolkit-update/SKILL.md"
   check_pair "$TEMPLATES/opencode/agent/builder.md.tmpl"   "$TARGET/.opencode/agent/builder.md"
   check_pair "$TEMPLATES/opencode/agent/reviewer.md.tmpl"  "$TARGET/.opencode/agent/reviewer.md"
   check_pair "$TEMPLATES/opencode/agent/tester.md.tmpl"    "$TARGET/.opencode/agent/tester.md"
@@ -359,10 +359,12 @@ render() {
   printf 'init.sh: wrote %s\n' "$2"
 }
 
-render "$TEMPLATES/claude/agents/planner.md.tmpl"    "$TARGET/.claude/agents/planner.md"
-render "$TEMPLATES/claude/agents/senior-dev.md.tmpl" "$TARGET/.claude/agents/senior-dev.md"
-render "$TEMPLATES/claude/commands/feature.md.tmpl"  "$TARGET/.claude/commands/feature.md"
-render "$TEMPLATES/claude/commands/toolkit-update.md.tmpl" "$TARGET/.claude/commands/toolkit-update.md"
+render "$TEMPLATES/codex/agents/planner.toml.tmpl" "$TARGET/.codex/agents/planner.toml"
+render "$TEMPLATES/codex/agents/senior-dev.toml.tmpl" "$TARGET/.codex/agents/senior-dev.toml"
+render "$TEMPLATES/codex/agents/reviewer-fallback.toml.tmpl" "$TARGET/.codex/agents/reviewer-fallback.toml"
+render "$TEMPLATES/codex/config.toml.tmpl" "$TARGET/.codex/config.toml"
+render "$TEMPLATES/codex/skills/feature/SKILL.md.tmpl" "$TARGET/.agents/skills/feature/SKILL.md"
+render "$TEMPLATES/codex/skills/toolkit-update/SKILL.md.tmpl" "$TARGET/.agents/skills/toolkit-update/SKILL.md"
 render "$TEMPLATES/opencode/agent/builder.md.tmpl"   "$TARGET/.opencode/agent/builder.md"
 render "$TEMPLATES/opencode/agent/reviewer.md.tmpl"  "$TARGET/.opencode/agent/reviewer.md"
 render "$TEMPLATES/opencode/agent/tester.md.tmpl"    "$TARGET/.opencode/agent/tester.md"
@@ -392,9 +394,8 @@ if [ "$FRESH_SCAFFOLD" -eq 1 ] && [ ! -f "$STAMP" ]; then
   printf 'init.sh: wrote %s\n' "$STAMP"
 fi
 
-# .agents/.oc-port and .agents/.claude-session-id.* are local machine state
-# (which port scripts/team.sh last bound; which Claude conversation each
-# tmux session name is pinned to), never something to commit.
+# .agents/.oc-port is local machine state (which port scripts/team.sh last
+# bound), never something to commit.
 # Append-if-missing when the target is a git repo — additive only, in
 # keeping with this script's never-overwrite stance; a project that ignores
 # these differently is left alone.
@@ -406,13 +407,6 @@ if [ -d "$TARGET/.git" ]; then
       printf '.agents/.oc-port\n'
     } >> "$GITIGNORE"
     printf 'init.sh: added .agents/.oc-port to %s\n' "$GITIGNORE"
-  fi
-  if ! grep -qxF '.agents/.claude-session-id.*' "$GITIGNORE" 2>/dev/null; then
-    {
-      printf '\n# local Claude session ids pinned per tmux session name by scripts/team.sh\n'
-      printf '.agents/.claude-session-id.*\n'
-    } >> "$GITIGNORE"
-    printf 'init.sh: added .agents/.claude-session-id.* to %s\n' "$GITIGNORE"
   fi
 fi
 
@@ -430,19 +424,18 @@ Next steps:
      has something to attach to.
   3. Load the "delegate" skill at the start of the lead's own session — it
      is the context-discipline half of this, the workflow half is
-     .claude/commands/feature.md.
-  4. Make sure $TARGET has its own CLAUDE.md/AGENTS.md — the generated
+     .agents/skills/feature/SKILL.md.
+  4. Make sure $TARGET has its own AGENTS.md — the generated
      files defer project-specific constraints to it and have nothing to
      say without one.
-  5. On the first /feature run, the lead will notice
+  5. On the first \$feature run, the lead will notice
      .agents/.needs-customization and ask whether to fill the role files'
      generic pitfalls/hard-rules sections with this project's real ones.
-     If your lead isn't Claude Code (that check lives in feature.md, which
-     is Claude-specific), do that pass yourself, once, by hand — and
-     delete the marker file when done.
+     If the skill is unavailable, do that pass yourself once and delete the
+     marker file when done.
   6. Later, once the toolkit itself has moved on: bin/init.sh --update
      --target $TARGET shows a drift summary (exit 1 = something to merge),
-     and /toolkit-update walks your lead through the merge. Refresh the
+     and \$toolkit-update walks your lead through the merge. Refresh the
      stamp afterwards: bin/init.sh --refresh-stamp --target $TARGET.
 
 MSG

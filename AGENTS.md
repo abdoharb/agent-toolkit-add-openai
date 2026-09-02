@@ -2,7 +2,8 @@
 
 A reusable, project-agnostic version of the planner → implement → review →
 test multi-agent pipeline. `bin/init.sh` scaffolds it into any target repo:
-Claude subagents for planning/implementing, OpenCode (any vendor) for
+Codex subagents (Sol for planning/review, Terra for implementation) and
+OpenCode (any vendor) for
 cross-vendor implement/review/test, a state file (`.agents/T-<id>.md`) as the
 one handoff surface between roles, and a `delegate` skill that keeps the
 orchestrating lead's own context small across a long run.
@@ -46,7 +47,7 @@ the manual version:
 mkdir -p /tmp/toolkit-smoke && bash bin/init.sh \
   --target /tmp/toolkit-smoke --project-name x \
   --builder-model a/b --reviewer-model a/c \
-  --reviewer-fallback-model d/e --tester-model a/b
+  --tester-model a/b
 grep -rl '__[A-Z_]*__' /tmp/toolkit-smoke   # must print nothing — no unfilled placeholder
 rm -rf /tmp/toolkit-smoke
 ```
@@ -64,8 +65,8 @@ files are skipped, not clobbered (`render()`'s core guarantee).
 | `test/smoke.sh` | The automated smoke run (see Commands). CI runs it plus shellcheck on every push |
 | `test/invariants.sh` | Cross-file rule presence check: one grep per (rule, file) pair over the hand-synced copies. Add a rule = one line in its table |
 | `.github/workflows/ci.yml` | Runs `test/smoke.sh` + shellcheck (`bin/init.sh`, the test, and every `templates/scripts/*.tmpl`) |
-| `templates/claude/agents/` | `planner.md.tmpl`, `senior-dev.md.tmpl` — Claude subagent role definitions |
-| `templates/claude/commands/` | `feature.md.tmpl` — the `/feature` pipeline command (the lead's own instructions); `toolkit-update.md.tmpl` — the `/toolkit-update` merge command for already-scaffolded projects |
+| `templates/codex/` | `config.toml.tmpl` pins the Sol lead and enables subagents; `agents/` contains the Sol/Terra project-scoped custom-agent definitions |
+| `templates/codex/skills/` | `feature/SKILL.md.tmpl` — the `$feature` pipeline skill; `toolkit-update/SKILL.md.tmpl` — the `$toolkit-update` merge skill for already-scaffolded projects |
 | `templates/opencode/agent/` | `builder.md.tmpl`, `reviewer.md.tmpl`, `tester.md.tmpl` — OpenCode role definitions |
 | `templates/agents-state/` | `TEMPLATE.md.tmpl` — the `T-<id>` state-file shape every role reads and appends to |
 | `templates/scripts/` | `oc.sh.tmpl` (OpenCode CLI wrapper), `team.sh.tmpl` (+ `team-completion.bash.tmpl`; tmux layout), `verify-state.sh.tmpl` (state file) / `verify-spec.sh.tmpl` (spec, before the approval gate) / `promote-findings.sh.tmpl` — all deterministic, no-LLM-call structural checks |
@@ -73,12 +74,12 @@ files are skipped, not clobbered (`render()`'s core guarantee).
 | `skills/toolkit-init/` | Thin skill wrapping `bin/init.sh`, for running the scaffold conversationally |
 | `skills/dev-team-generator/` | Self-contained, interview-driven alternative to `toolkit-init`: generates the team + flow live for whatever tool(s) are actually available, instead of stamping out `templates/`. Its own `reference/lessons-learned.md` is a generalized, tool-agnostic distillation of this toolkit's hardening history — see the Conventions bullet below |
 | `skills/status-board/` | Keeps a project-wide status board in sync with per-task state files — independent of `init.sh` |
-| `skills/karpathy-guidelines/` | Behavioral defaults loaded by the lead via `feature.md`; inlined into senior-dev/builder rather than granted Skill access |
+| `skills/karpathy-guidelines/` | Behavioral defaults loaded by the lead via the `$feature` skill; inlined into `senior_dev`/builder rather than granted Skill access |
 | `skills/self-improvement/` | Optional, off by default: lead-only capture of user corrections into its own instruction files. Never auto-loaded |
 | `SYSTEM.md` | Tool-agnostic one-pager meant to be handed to any AI ("recreate this system with yourself as lead") |
 | `CHANGELOG.md` | Impact-tagged per-release entries (`[contract]` › `[safety]` › `[process]` › `[docs]`). Append an entry in the same commit as any template/script change — this is what lets a downstream project triage an update without reading raw diffs |
 | `migrations/` | Numbered, hand-appliable notes for `[contract]` changes only. No migration runner, by design. Write one in the same commit as the contract change it describes |
-| `docs/UPGRADING.md` | The downstream-update plan (provenance stamp → tags/changelog → `--update` triage → migrations → `/toolkit-update`); stages 1–5 are implemented in `bin/init.sh` + `CHANGELOG.md` + `migrations/` |
+| `docs/UPGRADING.md` | The downstream-update plan (provenance stamp → tags/changelog → `--update` triage → migrations → `$toolkit-update`); stages 1–5 are implemented in `bin/init.sh` + `CHANGELOG.md` + `migrations/` |
 | `REVIEW.md` / `REVIEW-2.md` | Point-in-time honest reviews; see each file's status section for applied vs open items |
 | `REVIEW-2.md` | Third review pass — the delivery contract (acceptance criteria are never marked met by anyone), the status state machine, the missing team-charter layer. Does not repeat `REVIEW.md`; its Part D re-ranks and prunes that file's backlog |
 | `docs/UPGRADING.md` | Staged plan for keeping an already-scaffolded downstream project current: provenance stamp, tagged releases + impact-classified changelog, `--update` triage, AI-assisted merge |
@@ -92,12 +93,12 @@ files are skipped, not clobbered (`render()`'s core guarantee).
   what makes re-running `init.sh` safe and lets a project's own
   customizations survive a re-scaffold. Don't change that default.
 - **Templates never hardcode project-specific constraints.** Every
-  generated role file says "read this project's own `CLAUDE.md` /
-  `AGENTS.md` first" rather than guessing at a target project's security
+  generated role file says "read this project's own `AGENTS.md` first"
+  rather than guessing at a target project's security
   posture, banned patterns, or style. The toolkit owns the *process*; the
   target project's own guidance file owns the *content*. If you're tempted
   to bake in a specific rule (e.g. "never use `innerHTML`"), it belongs in
-  an example project's own `CLAUDE.md`, not here.
+  an example project's own `AGENTS.md`, not here.
 - **Every generated role's reply to the lead is short by design** — a
   verdict line, a pass/fail count, the Latest-handoff line — never a copy
   of the diff, findings, or test output it already wrote to the state
@@ -106,7 +107,7 @@ files are skipped, not clobbered (`render()`'s core guarantee).
   "Report"/"Output" section, preserve that shape rather than reverting to
   "report your findings/output to the lead."
 - **Keep `templates/` and any applied copy of this toolkit in sync** (any
-  repo that has scaffolded it, with its own `.claude/` + `.opencode/` +
+  repo that has scaffolded it, with its own `.codex/` + `.opencode/` +
   `.agents/TEMPLATE.md`) when one side gets a
   structural fix — a new state-file field, a new script, a report-back
   change. They're meant to be the same mechanism, generic vs. applied.
@@ -115,7 +116,7 @@ files are skipped, not clobbered (`render()`'s core guarantee).
   change.
 - **The lead's flow exists in three hand-synced copies — re-diff all
   three when the pipeline sequence changes:**
-  `templates/claude/commands/feature.md.tmpl`, `SYSTEM.md`, and
+  `templates/codex/skills/feature/SKILL.md.tmpl`, `SYSTEM.md`, and
   `skills/dev-team-generator/reference/flow-example.md`. They serve three
   audiences (generated project / any-AI-as-lead / generate-anything skill)
   but must carry the same sequence and stop-and-ask rules. These have
@@ -140,7 +141,7 @@ files are skipped, not clobbered (`render()`'s core guarantee).
   file already explains why: it exists so a lesson earned once against
   OpenCode, say, doesn't have to be re-earned by a future project running
   some other tool entirely). This is a distinct sync step from the bullet
-  above: that one keeps the Claude+OpenCode *mechanism* consistent across
+  above: that one keeps the Codex+OpenCode *mechanism* consistent across
   `templates/` and its applied copies; this one keeps the *generalized
   knowledge* available to `dev-team-generator`'s any-tool generation path,
   which doesn't read `templates/` at all. A change that's purely
@@ -156,7 +157,7 @@ files are skipped, not clobbered (`render()`'s core guarantee).
   `init.sh`. Use `init.sh --update` to see what changed instead.
 - `.agents/.needs-customization` is written only when `FRESH_SCAFFOLD` was
   true *before* any `render()` call ran (checked via whether
-  `.claude/commands/feature.md` already existed) — never on `--update`,
+  `.agents/skills/feature/SKILL.md` already existed) — never on `--update`,
   and never again once deleted. The provenance stamp
   (`.agents/.toolkit-version`) follows the same ordering rule: written
   exactly once on a fresh scaffold, never by `--update` (that would erase

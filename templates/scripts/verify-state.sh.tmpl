@@ -80,7 +80,7 @@ if grep -q '^### Pass .*verdict: <PASS | CHANGES_REQUESTED>$' "$FILE"; then
 fi
 
 # The loop cap is structural, not advisory: a Pass 3 heading means a third
-# review loop ran, which feature.md forbids (two failed loops means the spec
+# review loop ran, which the $feature skill forbids (two failed loops means the spec
 # was wrong, not the code — stop and ask the user).
 if grep -q '^### Pass 3' "$FILE"; then
   fail "a third review pass (Pass 3) exists — the two-loop cap is exceeded; escalate to the user instead"

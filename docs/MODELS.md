@@ -10,18 +10,18 @@ Independence is about **model family / lab weights**, not who prints the
 invoice. Two GLM snapshots on one aggregator are still the same family.
 `auto` is not a family; never use it for the reviewer.
 
-Dated August 2026. Credit ratios drift; re-check the provider's own table
+Dated September 2026. Credit ratios drift; re-check the provider's own table
 when a window starts emptying sooner than you expect.
 
 ## What burns credits
 
-A `/feature` run is not five equal calls:
+A `$feature` run is not five equal calls:
 
 | Role | Typical volume | What to optimize |
 | --- | --- | --- |
 | Lead | Long session, few tokens per step if it only reads `Latest handoff` | Instruction-following, not coding power |
 | Planner | One (maybe two) shots, read-heavy, short state-file write | Spec quality; cost is small |
-| Implementer | The hog — many tool calls | Quality **and** cost; this is where Opus/K3 empty a window |
+| Implementer | The hog — many tool calls | Quality **and** cost; this is where Terra/K3 empty a window |
 | Reviewer | One or two shots, large context (spec + diff) | Skepticism, different family; per-call price is fine |
 | Tester | One shot + a smoke command | Faithful reporting; cheapest capable model |
 
@@ -36,11 +36,11 @@ request volume per 5h window, expensive → cheap:
 
 | Family | Relative burn | Notes |
 | --- | --- | --- |
-| Claude Opus | Highest (usually a **different** pool than Go) | Do not put on a tool loop |
-| Claude Sonnet | High, other pool | Lead + planner; reviewer fallback |
+| GPT-5.6 Sol | Flagship Codex model | Lead + planner + independent reviewer fallback |
+| GPT-5.6 Terra | Balanced Codex model | Codex implementer; efficient supporting agents |
 | Kimi K3 | Very high on Go (~110 req / 5h) | Rare “actually hard” implementer, not default |
 | GLM-5.3 | High (~220 req / 5h, tighter cap than 5.2) | Best GLM for **one-shot** review |
-| GLM-5.1 / 5.2 | Mid–high (~880 req / 5h) | Review, or planner if Claude credits are tight |
+| GLM-5.1 / 5.2 | Mid–high (~880 req / 5h) | OpenCode review |
 | Kimi K2.6 / K2.7 Code | Mid (~1k–1.3k req / 5h) | Default implementer — agentic loops |
 | DeepSeek V4 Pro | Low | Implementer when the window is tight |
 | DeepSeek V4 Flash | Lowest (~30k req / 5h) | Tester only |
@@ -56,20 +56,20 @@ rules, no app runtime):
 
 | Role | Model | Why |
 | --- | --- | --- |
-| **Lead** | Claude Sonnet | Already the Claude Code session. Opus does not improve dispatch. |
-| **Planner** | Claude Sonnet | One shot. A cheaper model writes mushy ACs or starts designing the implementation. Drop to GLM-5.2 only if the Claude pool is the bottleneck. |
-| **Implementer** (`builder` / `senior-dev`) | **Kimi K2.7 Code** (or K2.6) | Cost/quality for surgical template + `init.sh` work. GLM-5.2 only if Kimi is missing. Not GLM-5.3, not K3, not Opus as the default loop. |
+| **Lead** | GPT-5.6 Sol | Strongest fit for ambiguous orchestration, planning, validation, and follow-through. |
+| **Planner** | GPT-5.6 Sol | One high-leverage spec pass with strong instruction-following. |
+| **Implementer** (`builder` / `senior_dev`) | **Kimi K2.7 Code** via OpenCode, or GPT-5.6 Terra for the Codex path | Kimi preserves cross-vendor implementation; Terra balances capability and cost for a Codex-native implementation loop. |
 | **Reviewer** | **GLM-5.3** or **5.2** | Different family than Kimi. One/two calls, so GLM's per-call cost is acceptable. Catches process bugs (leftover placeholders, `render()` skip-if-exists, permission YAML ≠ enforcement) better than Flash. |
-| **Reviewer fallback** | Claude Sonnet (or DeepSeek Pro) | A **third** family, and preferably a **second gateway** (see below). Used when builder would share a family with the default reviewer. |
+| **Reviewer fallback** | GPT-5.6 Sol custom Codex agent | A different family and gateway, used when builder would share a family with the default OpenCode reviewer. |
 | **Tester** | DeepSeek V4 Flash | Smoke `init.sh` into `/tmp`, assert no `__[A-Z_]*__`, second run does not clobber. Flash is enough. |
 
 `init.sh` shape (replace with strings from `opencode models`):
 
 ```bash
---claude-model sonnet \
+--codex-sol-model gpt-5.6-sol \
+--codex-terra-model gpt-5.6-terra \
 --builder-model "<aggregator>/kimi-k2.7-code" \
 --reviewer-model "<aggregator>/glm-5.2" \
---reviewer-fallback-model sonnet \
 --tester-model "<aggregator>/deepseek-v4-flash"
 ```
 
@@ -78,10 +78,10 @@ does not count). Switch reviewer to Kimi or DeepSeek Pro.
 
 Tight credits: DeepSeek Pro implementer, GLM-5.2 reviewer, Flash tester.
 High-stakes (`render()`, permission blocks, state-file contract): keep
-Kimi on implementer; optionally fire the Sonnet fallback as a second
-review pass — still cheaper than implementing on Opus.
+Kimi on implementer; optionally fire the Sol fallback as a second review
+pass.
 
-Do not: Claude on builder **and** reviewer; K3/Opus as default
+Do not: one model family on builder **and** reviewer; K3/Sol as the default
 implementer; Flash as reviewer; `auto` anywhere independence matters.
 
 ## Provider: one aggregator for workers, not one tool per lab
@@ -89,11 +89,11 @@ implementer; Flash as reviewer; `auto` anywhere independence matters.
 This toolkit has two different words that are easy to smash together:
 
 - A **tool** is a harness with its own agent files and permission model
-  (Claude Code, OpenCode, …). Adding one is `docs/ADDING-A-TOOL.md`.
-- A **model family** is Kimi / GLM / DeepSeek / Claude. That is an
+  (Codex, OpenCode, …). Adding one is `docs/ADDING-A-TOOL.md`.
+- A **model family** is Kimi / GLM / DeepSeek / GPT-5.6. That is an
   `init.sh` flag on an existing role, not a new `templates/<lab>/`.
 
-**Do not add Moonshot, Zhipu, DeepSeek, or Anthropic as extra toolkit
+**Do not add Moonshot, Zhipu, or DeepSeek as extra toolkit
 tools** just to get those weights. You would copy `builder.md` /
 `reviewer.md` N times for no permission-model reason, and every
 behavioral fix would become N edits — the failure mode
@@ -118,8 +118,8 @@ Concrete options, in order:
    a missing family, data-residency, or surviving that aggregator going
    down. Three dashboards, three rate limits, three keys — real cost.
 
-**Keep Claude as its own provider** for lead / planner (Claude Code) and
-as reviewer fallback. That is already how the pipeline is split, and it
+**Keep Codex as its own provider** for the Sol lead/planner/reviewer
+fallback and Terra implementer path. That is how the pipeline is split, and it
 is the one extra connection worth having: a second *gateway*, so an
 aggregator outage or a silent model substitution cannot take out both
 implementation and review.
@@ -127,7 +127,7 @@ implementation and review.
 That hybrid is the recommendation:
 
 ```
-Claude Code  ── lead, planner, (optional senior-dev), reviewer fallback
+Codex        ── Sol lead/planner/reviewer fallback; Terra senior_dev
 OpenCode     ── builder, reviewer, tester
                  └── one aggregator: Kimi + GLM + DeepSeek
 ```
@@ -137,7 +137,7 @@ OpenCode     ── builder, reviewer, tester
 - Same HTTP front door ≠ same weights. Kimi vs GLM on one gateway still
   satisfies the family rule. Two GLM ids do not.
 - Shared wrappers can correlate tool-call bugs. The fallback reviewer
-  on Claude is the cheap hedge; a second aggregator is not worth it
+  on Codex is the hedge; a second aggregator is not worth it
   until the first one has actually lied about which model ran.
 - One credit window: the implementer runs first and can starve review.
   If the 5h cap is tight, implement on DeepSeek Pro, or stop and wait —

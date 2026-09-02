@@ -1,16 +1,15 @@
 # System — read this first, whatever AI or tool you are
 
-One file, meant to be handed to **any** AI coding tool (Claude, Codex,
-Gemini, whatever you're running) with an instruction like "recreate this
+One file, meant to be handed to **any** AI coding tool (Codex, Gemini,
+or whatever you're running) with an instruction like "recreate this
 system, with yourself as the lead." It gives you the *shape* of the whole
 pipeline compactly, so you don't pay to read every file in `templates/` up
 front — pull in a specific template's full text only once you actually need
 that role's exact prose, using the paths cited below.
 
 **Do not copy any template file byte-for-byte assuming it fits your tool.**
-Claude Code and OpenCode both discover custom agent files per-repo; not
-every tool does — some tools (Codex, for one) only support custom agents
-globally per machine, not per-repo, and permission models differ in shape,
+Codex and OpenCode both discover custom agent files per repo; not every
+tool does, and permission models differ in shape,
 not just detail (a per-command allow/deny/ask map is not the same kind of
 thing as one coarse sandbox flag). Read `docs/ADDING-A-TOOL.md` before
 assuming a mechanism transfers — check your actual tool's real config and
@@ -53,9 +52,8 @@ with only a short status: a verdict line, a pass/fail count, or the one-line
 <role>`). The lead reads that one line between steps instead of re-reading
 the whole file, and opens it in full only on a verification failure or a
 real decision. This is what keeps the lead's own context flat across a long
-run — see `templates/claude/commands/feature.md.tmpl`'s "Token discipline"
-section for the reasoning in full, even though that file's own format is
-Claude-Code-specific.
+run — see `templates/codex/skills/feature/SKILL.md.tmpl`'s "Token
+discipline" section for the reasoning in full.
 
 **Nobody may declare their own work done — and someone must declare it.**
 The acceptance criteria are the contract; a criterion nobody records an
@@ -224,8 +222,8 @@ mechanism. You need three things:
    pitfalls/hard-rules text rather than this codebase's real ones — do that
    customization pass with the human before running anything, then delete
    the marker. It is written once, on a fresh scaffold only, and the check
-   otherwise lives in a Claude-Code-specific command file that you, as a
-   different lead, will never execute.
+   otherwise lives in the Codex `$feature` skill that another lead may
+   never execute.
 1. **A way to read and write `.agents/T-<id>.md`** — any tool with file
    access can do this.
 2. **A way to run each worker role** — either do the work yourself inline
@@ -240,17 +238,16 @@ mechanism. You need three things:
 For the exact orchestration *sequence* (preflight checks → dispatch planner
 → show the spec and wait for approval → implement → review loop → test →
 report and ask before merging), read
-`templates/claude/commands/feature.md.tmpl` end to end. Its file format
-(Claude Code's slash-command frontmatter) won't apply to you, but the
-sequence and the stop-and-ask list in it are tool-agnostic — that's the
-part to actually adopt.
+`templates/codex/skills/feature/SKILL.md.tmpl` end to end. Its skill
+frontmatter may not apply to your tool, but the sequence and stop-and-ask
+list are tool-agnostic.
 
 For a given worker role's exact prose (its hard rules, working rhythm,
 report format), read the closest existing template as a **style
 reference**, not a copy target:
 
-- `templates/claude/agents/planner.md.tmpl` — planner
-- `templates/claude/agents/senior-dev.md.tmpl` or
+- `templates/codex/agents/planner.toml.tmpl` — planner
+- `templates/codex/agents/senior-dev.toml.tmpl` or
   `templates/opencode/agent/builder.md.tmpl` — implementer
 - `templates/opencode/agent/reviewer.md.tmpl` — reviewer
 - `templates/opencode/agent/tester.md.tmpl` — tester
@@ -263,7 +260,7 @@ recreate the behavior, don't paste the file.
 
 ## If you're scaffolding into a fresh repo, not just orienting yourself
 
-`bin/init.sh` renders the Claude and OpenCode templates into a target repo
+`bin/init.sh` renders the Codex and OpenCode templates into a target repo
 mechanically (see README's "Quick start"). Use it if your tool is one of
 those two; otherwise this file plus `docs/ADDING-A-TOOL.md` is the path —
 there's no flag for "generate my tool's shim," it's a research step

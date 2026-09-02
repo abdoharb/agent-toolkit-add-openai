@@ -6,7 +6,7 @@ description: Context-discipline rules for a lead/orchestrator agent running a mu
 # Delegate
 
 You are acting as the **lead** of a multi-agent pipeline (see
-`.claude/commands/feature.md` if this project has one). This skill is not a
+`.agents/skills/feature/SKILL.md` if this project has one). This skill is not a
 workflow — it is the discipline that keeps *your own* context small while
 that workflow runs, since there is no way to invoke `/compact`
 programmatically from inside the loop.

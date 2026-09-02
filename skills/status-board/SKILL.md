@@ -61,7 +61,7 @@ status board row instead of leaving it blank or forcing a fit.
    files.
 2. Add an "Active tasks" table to the status file: task id, title, live
    `Status:`, checklist-line mapping.
-3. In this project's pipeline instructions (`.claude/commands/feature.md`
+3. In this project's pipeline instructions (`.agents/skills/feature/SKILL.md`
    if scaffolded from this toolkit — see that template's step 5, "Report",
    for where the line goes), add one line to every step that currently says
    "report to the user" or "merge": update the table first, every time —

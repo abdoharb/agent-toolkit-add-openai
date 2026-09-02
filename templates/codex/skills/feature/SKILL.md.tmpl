@@ -1,9 +1,10 @@
 ---
-description: Run the full multi-agent pipeline for a feature — planner, approval, implement, review, test.
-argument-hint: <feature description>
+name: feature
+description: Run the full planner, approval, implementation, review, and test pipeline for a feature or bug fix. Use when the user invokes $feature or explicitly asks to run the agent pipeline.
 ---
 
-Run the agent pipeline for: **$ARGUMENTS**
+Run the agent pipeline for the feature or bug described in the user's
+request. Treat text following an explicit `$feature` mention as the request.
 
 You are the **LEAD**. Your job is narrower than it looks: manage sessions
 (dispatch the right role, track which task is where) and make the decisions
@@ -26,7 +27,7 @@ no duplicates, no unfilled placeholder) cannot hallucinate a pass. If the
 "delegate" skill is available, load it now. Same for "karpathy-guidelines"
 if it's available — it applies to your own orchestration decisions, not
 only to code a role writes; dispatched roles already carry an inlined copy
-of the same behavioral defaults in their own role files (`senior-dev.md` /
+of the same behavioral defaults in their own role files (`senior-dev.toml` /
 `builder.md`), so this is deliberately not re-taught to them here.
 
 Everything passes through `.agents/T-<id>.md`. Context is never carried
@@ -54,10 +55,10 @@ does not know it.
 ## Preflight
 
 1. **First run only:** if `.agents/.needs-customization` exists, this
-   project was just scaffolded — the role files under `.claude/agents/` and
+   project was just scaffolded — the role files under `.codex/agents/` and
    `.opencode/agent/` still carry generic pitfalls/hard-rules text, not this
    codebase's actual ones. Ask the user: read the real source tree and this
-   project's own CLAUDE.md/AGENTS.md, then fill those sections in with real
+   project's own `AGENTS.md`, then fill those sections in with real
    specifics, now, before starting the requested feature? If yes, do that
    pass — touch only the prose describing project-specific pitfalls and
    hard rules; never the permission blocks, the rhythm/report format, or
@@ -202,7 +203,7 @@ permissions, or budgets mid-task.
 Once approved, set Status to `spec-approved` and record who implements:
 
 - **`builder`** (OpenCode, `__BUILDER_MODEL__`) — the default when a
-  cross-vendor implementation is wanted, or when Claude capacity is
+  cross-vendor implementation is wanted, or when Codex Terra capacity is
   unavailable.
 
   ```bash
@@ -220,8 +221,8 @@ Once approved, set Status to `spec-approved` and record who implements:
   the `oc.sh: session=ses_...` line from stderr and record it in *OpenCode
   session id* in `.agents/T-<id>.md`. Review and test below reuse it.
 
-- **`senior-dev`** (Claude subagent, `__CLAUDE_MODEL__`) — when the user
-  explicitly asks for Claude to implement instead, for this task.
+- **`senior_dev`** (Codex subagent, `__CODEX_TERRA_MODEL__`) — when the user
+  explicitly asks for Codex Terra to implement instead, for this task.
 
 Never run both on one task. Write the choice into *Implementer for this
 task* — the reviewer needs it to know whether cross-vendor independence
@@ -327,15 +328,18 @@ contents of every file the agent read, which is unreadable and expensive
 to paste into the state file. `--raw-out` keeps the full stream if you
 need to audit it.
 
-**Vendor independence.** The reviewer must not be the same model that
-wrote the code. If `senior-dev` (Claude) implemented, `__REVIEWER_MODEL__`
-is independent. But if **`builder`** implemented and it shares a vendor
-family with `__REVIEWER_MODEL__`, switch to `__REVIEWER_FALLBACK_MODEL__`
-instead, and note the substitution in the Decisions log. A reviewer that
-shares the author's blind spots is not a second eye.
+**Vendor independence.** The reviewer must not be the same model family that
+wrote the code. If `senior_dev` (Codex Terra) implemented,
+`__REVIEWER_MODEL__` is the cross-vendor reviewer. But if **`builder`**
+implemented and it shares a model family with `__REVIEWER_MODEL__`, spawn
+the Codex `reviewer_fallback` agent (`__CODEX_SOL_MODEL__`) instead. Its
+read-only sandbox means it returns the full verdict; write that verbatim
+under *Review verdicts* and note the substitution in the Decisions log.
+A reviewer that shares the author's blind spots is not a second eye.
 
 Write whichever model you actually dispatched — `__REVIEWER_MODEL__` or
-the fallback — into *Reviewer for this task* in the state file. This is a
+`reviewer_fallback` (`__CODEX_SOL_MODEL__`) — into *Reviewer for this task*
+in the state file. This is a
 separate record from the Decisions-log substitution note above: that's a
 one-time entry explaining *why*, this field is the durable answer to
 *who*, for anyone reading the task later.

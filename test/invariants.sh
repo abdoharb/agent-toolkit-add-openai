@@ -6,7 +6,7 @@
 # This toolkit deliberately keeps several hand-synced surfaces — the lead's
 # flow exists three times (the generated slash command, SYSTEM.md for an
 # any-tool lead, and the generator skill's flow example), the state-file
-# contract twice, and the role prose once per tool. CLAUDE.md's Conventions
+# contract twice, and the role prose once per tool. AGENTS.md's Conventions
 # say to re-diff them by hand after any pipeline change. That instruction is
 # correct and it does not work: it depends on the author remembering a
 # five-bullet rule at exactly the moment they are focused on something else.
@@ -28,13 +28,14 @@ set -eu
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 
-FEATURE="templates/claude/commands/feature.md.tmpl"
+FEATURE="templates/codex/skills/feature/SKILL.md.tmpl"
 SYSTEM="SYSTEM.md"
 FLOW="skills/dev-team-generator/reference/flow-example.md"
 STATE="templates/agents-state/TEMPLATE.md.tmpl"
 STATE_EX="skills/dev-team-generator/reference/state-file-example.md"
-PLANNER="templates/claude/agents/planner.md.tmpl"
-SENIOR="templates/claude/agents/senior-dev.md.tmpl"
+PLANNER="templates/codex/agents/planner.toml.tmpl"
+SENIOR="templates/codex/agents/senior-dev.toml.tmpl"
+CODEX_REVIEWER="templates/codex/agents/reviewer-fallback.toml.tmpl"
 BUILDER="templates/opencode/agent/builder.md.tmpl"
 REVIEWER="templates/opencode/agent/reviewer.md.tmpl"
 TESTER="templates/opencode/agent/tester.md.tmpl"
@@ -123,11 +124,11 @@ rule "a blocked task records what it waits on and since when" \
 # --- review convergence -----------------------------------------------------
 rule "a later review pass closes the earlier one by number" \
   'close every|closes the first|closes the earlier|by number' \
-  "$SYSTEM" "$FLOW" "$STATE" "$REVIEWER" "$SENIOR" "$BUILDER"
+  "$SYSTEM" "$FLOW" "$STATE" "$REVIEWER" "$CODEX_REVIEWER" "$SENIOR" "$BUILDER"
 
 rule "reviewer reads the implementer's stated reasoning" \
   'decisions log|decisions/reasoning log|reasoning log' \
-  "$REVIEWER" "$SYSTEM" "$FLOW"
+  "$REVIEWER" "$CODEX_REVIEWER" "$SYSTEM" "$FLOW"
 
 # --- independence of evidence ------------------------------------------------
 rule "tester maps criteria to covering tests" \

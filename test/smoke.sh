@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# Automated version of the manual smoke run documented in CLAUDE.md's
+# Automated version of the manual smoke run documented in AGENTS.md's
 # "Commands" section. Asserts the scaffolder's core guarantees end to end:
 #
 #   1. first scaffold writes every file, with no unsubstituted placeholder
@@ -35,7 +35,7 @@ fail() { printf 'smoke: FAIL: %s\n' "$1" >&2; exit 1; }
 
 INIT_ARGS=(--target "$TMP" --project-name smoke
   --builder-model a/b --reviewer-model a/c
-  --reviewer-fallback-model d/e --tester-model a/b)
+  --tester-model a/b)
 
 # --- 1. first scaffold -----------------------------------------------------
 bash "$ROOT/bin/init.sh" "${INIT_ARGS[@]}" > "$TMP/run1.log" 2>&1 \
@@ -44,6 +44,26 @@ bash "$ROOT/bin/init.sh" "${INIT_ARGS[@]}" > "$TMP/run1.log" 2>&1 \
 leftovers="$(grep -rl '__[A-Z_]*__' "$TMP" || true)"
 [ -z "$leftovers" ] || fail "unsubstituted placeholders remain in: $leftovers"
 ok "no unsubstituted __PLACEHOLDER__ tokens"
+
+python3 - "$TMP" <<'PY' || fail "generated Codex agent TOML is invalid"
+from pathlib import Path
+import sys
+import tomllib
+
+root = Path(sys.argv[1])
+agents = sorted((root / ".codex" / "agents").glob("*.toml"))
+assert len(agents) == 3, agents
+for path in agents:
+    data = tomllib.loads(path.read_text())
+    for key in ("name", "description", "model", "developer_instructions"):
+        assert data.get(key), (path, key)
+assert tomllib.loads((root / ".codex/agents/planner.toml").read_text())["model"] == "gpt-5.6-sol"
+assert tomllib.loads((root / ".codex/agents/senior-dev.toml").read_text())["model"] == "gpt-5.6-terra"
+config = tomllib.loads((root / ".codex/config.toml").read_text())
+assert config["model"] == "gpt-5.6-sol"
+assert config["agents"]["enabled"] is True
+PY
+ok "Codex custom-agent TOML parses with Sol/Terra defaults"
 
 wrote="$(grep -c '^init.sh: wrote ' "$TMP/run1.log" || true)"
 # Exclude this log and the customization marker; the provenance stamp is
@@ -61,26 +81,28 @@ STAMP="$TMP/.agents/.toolkit-version"
 [ -f "$STAMP" ] || fail "provenance stamp missing on fresh scaffold"
 grep -q '^toolkit_sha:' "$STAMP" || fail "stamp lacks toolkit_sha"
 grep -q '^builder_model: a/b' "$STAMP" || fail "stamp does not record the init flags"
+grep -q '^codex_sol_model: gpt-5.6-sol' "$STAMP" || fail "stamp lacks the Codex Sol default"
+grep -q '^codex_terra_model: gpt-5.6-terra' "$STAMP" || fail "stamp lacks the Codex Terra default"
 cp "$STAMP" "$TMP/stamp.bak"
 ok "fresh scaffold wrote the provenance stamp with flags + toolkit SHA"
 
 # --- 2. second run skips, never clobbers ------------------------------------
-cp "$TMP/.claude/commands/feature.md" "$TMP/feature.sentinel"
-printf 'LOCAL CUSTOMIZATION\n' >> "$TMP/.claude/commands/feature.md"
+cp "$TMP/.agents/skills/feature/SKILL.md" "$TMP/feature.sentinel"
+printf 'LOCAL CUSTOMIZATION\n' >> "$TMP/.agents/skills/feature/SKILL.md"
 rm -f "$TMP/.agents/.needs-customization"
 bash "$ROOT/bin/init.sh" "${INIT_ARGS[@]}" > "$TMP/run2.log" 2>&1 \
   || fail "second init.sh run failed"
 skips="$(grep -c '^init.sh: skip (exists)' "$TMP/run2.log" || true)"
 [ "$skips" = "$files" ] || fail "second run: $skips skips, expected $files"
 ! grep -q '^init.sh: wrote ' "$TMP/run2.log" || fail "second run wrote something"
-grep -q 'LOCAL CUSTOMIZATION' "$TMP/.claude/commands/feature.md" \
+grep -q 'LOCAL CUSTOMIZATION' "$TMP/.agents/skills/feature/SKILL.md" \
   || fail "second run clobbered a customized file"
 [ ! -f "$TMP/.agents/.needs-customization" ] || fail "marker recreated on non-fresh run"
 cmp -s "$TMP/stamp.bak" "$TMP/.agents/.toolkit-version" 2>/dev/null \
   || fail "second run touched the provenance stamp"
 ok "re-run skipped all $files files, preserved local edits, marker + stamp untouched"
 # restore the pristine render so the --update checks below start clean
-mv "$TMP/feature.sentinel" "$TMP/.claude/commands/feature.md"
+mv "$TMP/feature.sentinel" "$TMP/.agents/skills/feature/SKILL.md"
 
 # --- 3. provenance stamp ------------------------------------------------------
 
@@ -133,7 +155,7 @@ ok "--update without a stamp recovers the init values from the target's files"
 # --- 5. self-target guard ---------------------------------------------------
 if bash "$ROOT/bin/init.sh" --target "$ROOT" --project-name x \
      --builder-model a/b --reviewer-model a/c \
-     --reviewer-fallback-model d/e --tester-model a/b >/dev/null 2>&1; then
+     --tester-model a/b >/dev/null 2>&1; then
   fail "init.sh allowed scaffolding into its own checkout"
 fi
 ok "init.sh refuses --target pointing at the toolkit itself"

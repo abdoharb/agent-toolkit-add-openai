@@ -3,11 +3,30 @@
 Impact tags, in descending order of "drop what you are doing":
 `[contract]` › `[safety]` › `[process]` › `[docs]`.
 
-A downstream project (or its AI lead — run `/toolkit-update`) reads this
+A downstream project (or its AI lead — run `$toolkit-update`) reads this
 file *first* and the diffs second. See `docs/UPGRADING.md` for the full
 update workflow. Version bumps mean: **MAJOR** = state-file contract /
 role authority / script interface changed; **MINOR** = new template,
 script, flag, or role rule; **PATCH** = prose and docs.
+
+## Unreleased — 2026-09-01
+
+- `[contract]` Replaced the Claude Code scaffold with native Codex project
+  agents and repository skills. Planner and reviewer fallback use
+  `gpt-5.6-sol`; the Codex implementer uses `gpt-5.6-terra`. Generated
+  destinations are now `.codex/config.toml`, `.codex/agents/*.toml`, and
+  `.agents/skills/{feature,toolkit-update}/SKILL.md`. Migration:
+  `migrations/02-codex-sol-terra.md`.
+- `[contract]` Replaced `--claude-model` and
+  `--reviewer-fallback-model` with optional `--codex-sol-model` and
+  `--codex-terra-model` flags. The new flags default to the official model
+  IDs above and are recorded in `.agents/.toolkit-version`.
+- `[process]` `scripts/team.sh` now starts a Codex Sol lead and resumes with
+  `codex resume --last`; OpenCode remains the cross-vendor builder,
+  reviewer, and tester path.
+- `[docs]` Renamed root toolkit guidance from `CLAUDE.md` to `AGENTS.md`
+  and updated the active documentation, skills, tests, and state contract
+  for Codex.
 
 ## v0.4.0 — 2026-08-26
 
