@@ -284,8 +284,11 @@ load_flags_from_stamp() {
     if [ -z "${!var}" ]; then
       load_stamp_value "$key"
       # printf -v: portable indirect assignment (bash's ${!var:=x} does
-      # not actually assign on the macOS-shipped bash 3.2).
-      [ -n "$REPLY" ] && printf -v "$var" '%s' "$REPLY"
+      # not actually assign on the macOS-shipped bash 3.2). An `if`, not
+      # `[ … ] && …`: as the loop's last command a false test became the
+      # function's status, and set -e then killed init.sh silently whenever
+      # an older stamp lacked the newest key (builder_auto).
+      if [ -n "$REPLY" ]; then printf -v "$var" '%s' "$REPLY"; fi
     fi
   done
 }
@@ -355,7 +358,7 @@ if [ "$UPDATE" -eq 1 ]; then
       key="${spec%%|*}"; var="${spec##*|}"
       if [ -z "${!var}" ]; then
         recover_from_target "$key"
-        [ -n "$REPLY" ] && printf -v "$var" '%s' "$REPLY"
+        if [ -n "$REPLY" ]; then printf -v "$var" '%s' "$REPLY"; fi
       fi
     done
     apply_defaults
