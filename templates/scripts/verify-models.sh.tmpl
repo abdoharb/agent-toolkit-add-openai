@@ -14,13 +14,16 @@
 #
 # Reads the ids from `.pipeline/.toolkit-version` rather than taking them as
 # arguments, so the thing being validated is the thing the pipeline will
-# actually use. `claude/*` and `codex/*` entries are skipped: those roles
-# dispatch as native subagents, never through oc.sh, so the OpenCode server
-# has no opinion about them.
+# actually use. `claude/*` entries are skipped: those roles dispatch as
+# native subagents, never through oc.sh. `codex/*` entries (and a pinned
+# codex_model / codex_planner_model) are checked first against the Codex CLI's
+# own catalog (`codex debug models`): a mistyped Codex tester id used to
+# surface only when the lead spawned it, mid-task. Without the codex CLI that
+# check is reported as skipped, not passed.
 #
 # Usage: scripts/verify-models.sh
-# Exit 0 = every oc.sh-dispatched id resolves, prints one OK line.
-# Exit 1 = the invalid ids and what the provider actually offers.
+# Exit 0 = every checked id resolves, prints one OK line per runtime.
+# Exit 1 = the invalid ids and what the provider/catalog actually offers.
 
 set -eu
 
@@ -43,6 +46,49 @@ elif [ -f .pipeline/.oc-password ]; then
   OPENCODE_PASSWORD="$(cat .pipeline/.oc-password)"
 fi
 export OPENCODE_PASSWORD="${OPENCODE_PASSWORD:-}"
+
+# --- Codex model ids (native subagents; never dispatched through oc.sh) ------
+CODEX_IDS="$(sed -nE \
+  -e 's/^([a-z_]*model):[[:space:]]*codex\/([^[:space:]]+).*/\1 \2/p' \
+  -e 's/^(codex_model|codex_planner_model):[[:space:]]*([^[:space:]]+).*/\1 \2/p' \
+  "$MANIFEST" | awk '$2 != "inherit"')"
+if [ -n "$CODEX_IDS" ]; then
+  if ! command -v codex >/dev/null 2>&1; then
+    printf 'verify-models.sh: note: codex CLI not installed; Codex model ids NOT checked: %s\n' \
+      "$(printf '%s' "$CODEX_IDS" | awk '{print $1"="$2}' | paste -sd' ' -)" >&2
+  else
+    CODEX_CATALOG="$(mktemp)"
+    if ! codex debug models > "$CODEX_CATALOG" 2>/dev/null; then
+      rm -f "$CODEX_CATALOG"
+      echo "verify-models.sh: note: \`codex debug models\` failed; Codex model ids NOT checked" >&2
+    else
+      set +e
+      CODEX_IDS="$CODEX_IDS" python3 -c '
+import json, os, sys
+try:
+    doc = json.load(open(sys.argv[1], encoding="utf-8"))
+except Exception as e:
+    sys.exit(f"verify-models.sh: unparseable Codex model catalog: {e}")
+have = {m.get("slug") for m in doc.get("models", []) if isinstance(m, dict)}
+bad = []
+pairs = [line.split() for line in os.environ["CODEX_IDS"].splitlines() if line.strip()]
+for key, model in pairs:
+    if model not in have:
+        bad.append((key, model))
+offered = ", ".join(sorted(have))
+for key, model in bad:
+    print(f"verify-models.sh: {key} = {model} — Codex does not offer {model}; it offers: {offered}", file=sys.stderr)
+if bad:
+    sys.exit(1)
+print(f"verify-models.sh: OK ({len(pairs)} Codex model id(s) are in the Codex catalog)")
+' "$CODEX_CATALOG"
+      rc=$?
+      set -e
+      rm -f "$CODEX_CATALOG"
+      [ "$rc" -eq 0 ] || exit 1
+    fi
+  fi
+fi
 
 # Right after an `opencode serve` (re)start the provider list loads lazily, so
 # the first call can say a provider "is not on this server" when it simply has

@@ -47,6 +47,8 @@ CODEX_DEV="templates/codex/agents/codex-dev.toml.tmpl"
 CODEX_REVIEWER="templates/codex/agents/reviewer.toml.tmpl"
 CODEX_TESTER="templates/codex/agents/tester.toml.tmpl"
 CODEX_RULES="templates/codex/rules/pipeline.rules.tmpl"
+CODEX_REVIEWER_FALLBACK="templates/codex/agents/reviewer-fallback.toml.tmpl"
+CLAUDE_REVIEWER="templates/claude/agents/reviewer.md.tmpl"
 UPDATE="templates/claude/commands/toolkit-update.md.tmpl"
 OC_LEADER="templates/opencode/agents/leader.md.tmpl"
 OC_PLANNER="templates/opencode/agents/planner.md.tmpl"
@@ -159,6 +161,14 @@ rule "Codex implementer never commits" \
   'never try to commit' "$CODEX_DEV"
 rule "Codex reviewer runs in a read-only sandbox under the canonical review contract" \
   'sandbox_mode = "read-only".*\.opencode/agents/reviewer\.md' "$CODEX_REVIEWER"
+rule "Codex fallback reviewer is read-only under the canonical review contract" \
+  'sandbox_mode = "read-only".*\.opencode/agents/reviewer\.md' "$CODEX_REVIEWER_FALLBACK"
+rule "Claude reviewer follows the canonical review contract with no write tool" \
+  'tools: Read, Grep, Glob, Bash.*\.opencode/agents/reviewer\.md' "$CLAUDE_REVIEWER"
+rule "every reviewer that cannot write returns the full findings in its reply" \
+  'your reply is the record' "$CLAUDE_REVIEWER" "$CODEX_REVIEWER" "$CODEX_REVIEWER_FALLBACK"
+rule "the fallback reviewer is dispatched through its own runtime" \
+  'reviewer_fallback' "$FEATURE" "$CODEX_FEATURE"
 rule "Codex tester never records an AC outcome" \
   'never fill or tick' "$CODEX_TESTER"
 rule "implementer vendor family decides reviewer independence, Codex included" \

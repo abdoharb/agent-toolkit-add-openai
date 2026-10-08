@@ -51,10 +51,15 @@ capture also works in a nested checkout or a project without a Git root.
 | planner | `.codex/agents/planner.toml` | always; follows `.claude/agents/planner.md` |
 | implementer | `.codex/agents/codex-dev.toml` | when the user asks for Codex to implement (default stays OpenCode `builder`); follows `.claude/agents/senior-dev.md` |
 | reviewer | `.codex/agents/reviewer.toml` | only for `--reviewer-model codex/<model>`; `sandbox_mode = "read-only"`, follows `.opencode/agents/reviewer.md` |
+| fallback reviewer | `.codex/agents/reviewer-fallback.toml` (agent `reviewer_fallback`) | only for `--reviewer-fallback-model codex/<model>`; same contract and sandbox, used when the default reviewer shares the implementer's vendor family |
 | tester | `.codex/agents/tester.toml` | only for `--tester-model codex/<model>` |
 
 Each records its own thread id in the task file, and only that role's retry
-reuses it. `codex-dev` and the planner inherit the lead's model unless the
+reuses it. `scripts/verify-models.sh` checks every `codex/*` id (and a pinned
+lead/planner model) against `codex debug models`, so a typo fails at
+preflight instead of when the role is spawned. A `claude/*` reviewer or
+fallback gets `.claude/agents/reviewer.md`, which a Codex lead runs through
+`scripts/claude-review.sh`. `codex-dev` and the planner inherit the lead's model unless the
 project pins one in the TOML. After `codex-dev` implements, an OpenAI-family
 reviewer is not independent; the canonical flow switches to the fallback.
 

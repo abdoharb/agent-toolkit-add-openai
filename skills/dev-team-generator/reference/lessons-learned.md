@@ -784,3 +784,20 @@ widen a scoped deny. After any runtime major upgrade, read the live, resolved
 ruleset rather than the config file, check that the last matching rule for
 each role's write scope is the one you intended, and remove keys the runtime
 now treats as aliases. Add a structural check so the old key cannot return.
+
+## 39. Every file a check requires must have a producer
+
+A preflight that refuses to start without a role file, a flow step that
+spawns it, and a dispatch script that reads it can all agree with each other
+and still describe a role nobody creates. That is what happened: three
+places required a reviewer definition for one vendor and the scaffolder had
+no template for it, so the path worked only in the one project where someone
+had written it by hand. When a check, a flow step or a script names a file,
+trace it back to whatever generates it, and test a fresh scaffold for every
+supported role/vendor combination, not only the default one. The same audit
+caught two quieter cousins: a configured fallback for one vendor that
+produced nothing at all, and a model-id rewrite (`<vendor>/<alias>` →
+`<vendor>-<alias>`) that was only valid for some id shapes. Map ids in one
+place and test each shape; and validate every configured id against the
+runtime that will use it, including roles that never go through the main
+dispatcher.

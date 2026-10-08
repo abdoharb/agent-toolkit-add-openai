@@ -88,8 +88,11 @@ Apply these Codex adaptations:
   id and pass number, record **Codex reviewer thread id** after pass 1, and
   send pass 2 to that thread only. Its reply is the record: branch on its
   `VERDICT:` line and paste the findings under the canonical pass heading.
+  When the canonical vendor-independence rule switches to a `codex/*`
+  fallback, spawn `reviewer_fallback` (`.codex/agents/reviewer-fallback.toml`)
+  the same way, recording its thread in **Codex reviewer thread id**.
 - When the canonical flow says to dispatch a Claude `reviewer`
-  (`reviewer_model: claude/…`), run it headlessly: write the brief (what the
+  (`reviewer_model: claude/…`, or a `claude/*` fallback), run it headlessly: write the brief (what the
   reviewer cannot know from disk) to `.pipeline/T-<id>.review-<N>.brief`, then
   `scripts/bg-dispatch.sh start T-<id> review-<N> -- scripts/claude-review.sh
   T-<id> <N> .pipeline/T-<id>.review-<N>.brief`. The reply lands in

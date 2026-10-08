@@ -41,6 +41,9 @@ if [ "${1:-}" = features ]; then
   printf 'hooks stable %s\nmulti_agent stable true\n' "${FAKE_HOOKS:-true}"; exit 0
 fi
 if [ "${1:-}" = resume ] && [ "${2:-}" = --help ]; then echo '--no-daemon'; exit 0; fi
+if [ "${1:-}" = debug ] && [ "${2:-}" = models ]; then
+  printf '{"models":[{"slug":"gpt-good"},{"slug":"gpt-planner"}]}\n'; exit 0
+fi
 printf '%s\n' "$@" > "$FAKE_ARGS"
 if [ "${1:-}" = resume ]; then
   [ "${FAKE_RESUME_FAIL:-0}" = 0 ] || exit 9
@@ -153,6 +156,26 @@ if bash "$PREFLIGHT" > "$TMP/preflight.log" 2>&1; then fail "preflight accepted 
 grep -q 'cannot write .pipeline' "$TMP/preflight.log" || fail "write failure did not name its path"
 rm "$FAKEBIN/mktemp"
 ok "preflight checks actual writes and authenticated API access, including failures"
+
+# A codex/* fallback reviewer must exist and be read-only before dispatch.
+cp "$TMP/.pipeline/.toolkit-version" "$TMP/stamp.hold"
+printf 'reviewer_fallback_model: codex/gpt-good\n' >> "$TMP/.pipeline/.toolkit-version"
+if OC_SERVER=http://localhost:4999 bash "$PREFLIGHT" > "$TMP/preflight.log" 2>&1; then fail "preflight accepted a codex/* fallback with no agent file"; fi
+grep -q 'reviewer-fallback.toml is missing' "$TMP/preflight.log" || fail "missing fallback agent not named"
+cp "$TMP/stamp.hold" "$TMP/.pipeline/.toolkit-version"
+ok "preflight refuses a codex/* fallback reviewer with no read-only agent"
+
+# Codex model ids are checked against the Codex catalog, not skipped.
+VM="$TMP/vm"
+mkdir -p "$VM/scripts" "$VM/.pipeline"
+cp "$TMP/scripts/verify-models.sh" "$VM/scripts/"
+printf 'codex_model: inherit\ncodex_planner_model: gpt-planner\ntester_model: codex/gpt-good\n' > "$VM/.pipeline/.toolkit-version"
+OC_SERVER=http://localhost:4999 bash "$VM/scripts/verify-models.sh" > "$TMP/vm.log" 2>&1 || true
+grep -q 'OK (2 Codex model id(s) are in the Codex catalog)' "$TMP/vm.log" || fail "valid Codex ids were not confirmed: $(cat "$TMP/vm.log")"
+printf 'tester_model: codex/gpt-typo\n' > "$VM/.pipeline/.toolkit-version"
+if OC_SERVER=http://localhost:4999 bash "$VM/scripts/verify-models.sh" > "$TMP/vm.log" 2>&1; then fail "a mistyped Codex id passed"; fi
+grep -q "Codex does not offer gpt-typo; it offers: gpt-good, gpt-planner" "$TMP/vm.log" || fail "Codex typo not reported with the catalog: $(cat "$TMP/vm.log")"
+ok "verify-models checks codex/* and pinned Codex ids against the Codex catalog"
 
 # A legacy stamp remains readable for triage; init must not split the runtime.
 mkdir -p "$TMP/.agents"

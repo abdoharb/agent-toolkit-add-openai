@@ -179,6 +179,37 @@ bash "$ROOT/bin/init.sh" --update --target "$CR" > "$CR/update.log" 2>&1 \
   || fail "codex/* reviewer did not round-trip through --update triage"
 ok "Codex implementer is always scaffolded; a codex/* reviewer_model gets a read-only Codex reviewer"
 
+# A claude/* reviewer (or fallback) gets the Claude reviewer agent the flow and
+# claude-review.sh require; a codex/* fallback gets its own read-only agent.
+[ ! -e "$TMP/.claude/agents/reviewer.md" ] || fail "an OpenCode reviewer still scaffolded a Claude reviewer agent"
+[ ! -e "$TMP/.codex/agents/reviewer-fallback.toml" ] || fail "an OpenCode fallback still scaffolded a Codex fallback reviewer"
+for case in "claude/opus-5-5 d/e claude-opus-5-5" "a/c claude/sonnet sonnet" "claude/claude-fable-5-1 d/e claude-fable-5-1"; do
+  read -r rv_primary rv_fallback rv_model <<< "$case"
+  set -- "$rv_primary" "$rv_fallback" "$rv_model"
+  RV="$(mktemp -d "${TMPDIR:-/tmp}/toolkit-claude-reviewer.XXXXXX")"
+  bash "$ROOT/bin/init.sh" --target "$RV" --project-name smoke --builder-model a/b \
+    --reviewer-model "$1" --reviewer-fallback-model "$2" --tester-model a/b > "$RV/run.log" 2>&1 \
+    || fail "init.sh with reviewer $1 / fallback $2 failed"
+  grep -qx "model: $3" "$RV/.claude/agents/reviewer.md" \
+    || fail "reviewer $1 / fallback $2 did not render .claude/agents/reviewer.md with model $3"
+  grep -q '\.opencode/agents/reviewer\.md' "$RV/.claude/agents/reviewer.md" \
+    || fail "Claude reviewer does not follow the canonical review contract"
+  ! grep -qE '^tools:.*(Edit|Write)' "$RV/.claude/agents/reviewer.md" || fail "Claude reviewer was given a write tool"
+  ! grep -q '__[A-Z_]*__' "$RV/.claude/agents/reviewer.md" || fail "Claude reviewer has an unfilled placeholder"
+  bash "$ROOT/bin/init.sh" --update --target "$RV" > "$RV/update.log" 2>&1 \
+    || fail "Claude reviewer did not round-trip through --update triage ($1 / $2)"
+done
+CF="$(mktemp -d "${TMPDIR:-/tmp}/toolkit-codex-fallback.XXXXXX")"
+bash "$ROOT/bin/init.sh" --target "$CF" --project-name smoke --builder-model a/b \
+  --reviewer-model a/c --reviewer-fallback-model codex/fallback-model --tester-model a/b > "$CF/run.log" 2>&1 \
+  || fail "init.sh with a codex/* fallback reviewer failed"
+grep -q '^name = "reviewer_fallback"$' "$CF/.codex/agents/reviewer-fallback.toml" || fail "Codex fallback reviewer has the wrong name"
+grep -q '^model = "fallback-model"$' "$CF/.codex/agents/reviewer-fallback.toml" || fail "Codex fallback reviewer has the wrong model"
+grep -q '^sandbox_mode = "read-only"$' "$CF/.codex/agents/reviewer-fallback.toml" || fail "Codex fallback reviewer is not read-only"
+bash "$ROOT/bin/init.sh" --update --target "$CF" > "$CF/update.log" 2>&1 \
+  || fail "codex/* fallback reviewer did not round-trip through --update triage"
+ok "claude/* reviewer or fallback gets a read-only Claude reviewer agent; codex/* fallback gets a read-only Codex agent"
+
 for oc_file in agents/leader.md agents/planner.md commands/feature.md commands/toolkit-update.md; do
   [ -f "$TMP/.opencode/$oc_file" ] || fail "OpenCode lead file missing: $oc_file"
 done
@@ -707,6 +738,19 @@ if out="$(cd "$BG" && PATH="$FAKECLAUDE:$PATH" scripts/claude-review.sh T-5 1 2>
   fail "claude-review ran for a non-claude reviewer_model"
 fi
 grep -q 'not claude/\*' <<< "$out" || fail "claude-review did not refuse a non-claude reviewer_model: $out"
-ok "oc.sh --interrupt and claude-review.sh refuse bad input without dispatching"
+# The model claude-review.sh passes to the CLI: alias kept, version id prefixed,
+# and the fallback used when only the fallback is claude/*.
+# shellcheck disable=SC2016 # the stub's $@ must expand when the stub runs
+printf '#!/usr/bin/env bash\nprintf "%%s\\n" "$@" > "$FAKE_CLAUDE_ARGS"\necho "VERDICT: PASS"\n' > "$FAKECLAUDE/claude"
+for case in "claude/sonnet d/e sonnet" "claude/opus-5-5 d/e claude-opus-5-5" "a/c claude/haiku haiku"; do
+  read -r rv_primary rv_fallback rv_model <<< "$case"
+  set -- "$rv_primary" "$rv_fallback" "$rv_model"
+  printf 'reviewer_model: %s\nreviewer_fallback_model: %s\n' "$1" "$2" > "$BG/.pipeline/.toolkit-version"
+  (cd "$BG" && PATH="$FAKECLAUDE:$PATH" FAKE_CLAUDE_ARGS="$BG/claude-args" scripts/claude-review.sh T-5 1 >/dev/null 2>&1) \
+    || fail "claude-review failed for reviewer $1 / fallback $2"
+  grep -A1 -x -- '--model' "$BG/claude-args" | tail -1 | grep -qx "$3" \
+    || fail "claude-review passed the wrong --model for $1 / $2 (want $3): $(tr '\n' ' ' < "$BG/claude-args")"
+done
+ok "oc.sh --interrupt and claude-review.sh refuse bad input; claude-review maps model ids and falls back"
 
 printf '\nsmoke: all checks passed (%s)\n' "$PASSED"

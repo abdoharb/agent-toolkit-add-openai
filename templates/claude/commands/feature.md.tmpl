@@ -453,11 +453,15 @@ wrote the code. Compare the implementer's vendor family — Claude for
 with `__REVIEWER_MODEL__`'s. If they match, switch to
 `__REVIEWER_FALLBACK_MODEL__` instead, and note the substitution in the
 Decisions log. A reviewer that shares the author's blind spots is not a
-second eye.
+second eye. Dispatch the fallback through its own runtime: a `codex/*`
+fallback is the `reviewer_fallback` Codex subagent
+(`.codex/agents/reviewer-fallback.toml`, read-only), a `claude/*` fallback is
+the Claude reviewer below, and any other id is the OpenCode `reviewer` with
+`--model __REVIEWER_FALLBACK_MODEL__`.
 
-**A Claude reviewer** (`reviewer_model: claude/<model>` in
-`.pipeline/.toolkit-version`, with `.claude/agents/reviewer.md`) does not go
-through `oc.sh`. A Claude lead spawns it as a subagent; any other lead runs it
+**A Claude reviewer** (`reviewer_model: claude/<model>`, or a `claude/*`
+fallback, in `.pipeline/.toolkit-version`; `init.sh` scaffolds
+`.claude/agents/reviewer.md` for it) does not go through `oc.sh`. A Claude lead spawns it as a subagent; any other lead runs it
 headlessly: `scripts/claude-review.sh T-<id> <pass> [brief-file]`, detached
 through `bg-dispatch.sh` (`-- scripts/claude-review.sh …`). It allows only
 reads and the commands in its `REVIEW_TOOLS` list, refuses Edit/Write, and

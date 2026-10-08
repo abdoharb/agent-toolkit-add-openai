@@ -17,9 +17,11 @@
 #     [--codex-planner-model <id|inherit>] [--codex-planner-reasoning <effort|inherit>]
 #     [--builder-auto <ask|on>]
 #   Codex settings default to inherit: preserve local/parent choices.
-#   A `codex/<model>` --reviewer-model or --tester-model makes that role a
-#   native Codex subagent (.codex/agents/reviewer.toml, read-only sandbox, or
-#   .codex/agents/tester.toml) instead of an OpenCode dispatch.
+#   A `codex/<model>` --reviewer-model, --reviewer-fallback-model or
+#   --tester-model makes that role a native Codex subagent
+#   (.codex/agents/reviewer.toml / reviewer-fallback.toml, read-only sandbox,
+#   or .codex/agents/tester.toml) instead of an OpenCode dispatch. A
+#   `claude/<model>` reviewer or fallback gets .claude/agents/reviewer.md.
 #   --builder-auto records the project's standing answer to OpenCode `--auto`
 #   for builder dispatches: `ask` (default) asks at every spec approval; `on`
 #   is a standing user decision, recorded per task without asking again.
@@ -400,6 +402,28 @@ case "$TESTER_MODEL" in codex/*) CODEX_TESTER_MODEL="${TESTER_MODEL#codex/}" ;; 
 # Same for a `codex/<model>` reviewer: .codex/agents/reviewer.toml, read-only.
 CODEX_REVIEWER_MODEL=""
 case "$REVIEWER_MODEL" in codex/*) CODEX_REVIEWER_MODEL="${REVIEWER_MODEL#codex/}" ;; esac
+# And for a `codex/<model>` fallback reviewer: .codex/agents/reviewer-fallback.toml.
+CODEX_REVIEWER_FALLBACK_MODEL=""
+case "$REVIEWER_FALLBACK_MODEL" in codex/*) CODEX_REVIEWER_FALLBACK_MODEL="${REVIEWER_FALLBACK_MODEL#codex/}" ;; esac
+# A `claude/<model>` reviewer (or, failing that, fallback) is a Claude agent:
+# .claude/agents/reviewer.md, which a Claude lead spawns and any other lead
+# runs through scripts/claude-review.sh. Same id mapping as that script: an
+# alias (`sonnet`) or a full id (`claude-opus-5-5`) is kept, a bare version
+# id (`opus-5-5`) gets the `claude-` prefix.
+claude_model_id() {
+  case "$1" in
+    claude-*) printf '%s' "$1" ;;
+    *-*) printf 'claude-%s' "$1" ;;
+    *) printf '%s' "$1" ;;
+  esac
+}
+CLAUDE_REVIEWER_MODEL=""
+case "$REVIEWER_MODEL" in
+  claude/*) CLAUDE_REVIEWER_MODEL="$(claude_model_id "${REVIEWER_MODEL#claude/}")" ;;
+  *) case "$REVIEWER_FALLBACK_MODEL" in
+       claude/*) CLAUDE_REVIEWER_MODEL="$(claude_model_id "${REVIEWER_FALLBACK_MODEL#claude/}")" ;;
+     esac ;;
+esac
 
 # Captured before any render() call touches the target, so it reflects
 # whether this is the very first scaffold of this project — used below to
@@ -423,6 +447,8 @@ SED_ARGS=(
   -e "s|__TESTER_MODEL__|$TESTER_MODEL|g"
   -e "s|__CODEX_TESTER_MODEL__|$CODEX_TESTER_MODEL|g"
   -e "s|__CODEX_REVIEWER_MODEL__|$CODEX_REVIEWER_MODEL|g"
+  -e "s|__CODEX_REVIEWER_FALLBACK_MODEL__|$CODEX_REVIEWER_FALLBACK_MODEL|g"
+  -e "s|__CLAUDE_REVIEWER_MODEL__|$CLAUDE_REVIEWER_MODEL|g"
   -e "s|__TEST_DIR__|$TEST_DIR|g"
 )
 
@@ -469,12 +495,14 @@ if [ "$UPDATE" -eq 1 ]; then
 
   check_pair "$TEMPLATES/claude/agents/planner.md.tmpl"    "$TARGET/.claude/agents/planner.md"
   check_pair "$TEMPLATES/claude/agents/senior-dev.md.tmpl" "$TARGET/.claude/agents/senior-dev.md"
+  [ -z "$CLAUDE_REVIEWER_MODEL" ] || check_pair "$TEMPLATES/claude/agents/reviewer.md.tmpl" "$TARGET/.claude/agents/reviewer.md"
   check_pair "$TEMPLATES/claude/commands/feature.md.tmpl"  "$TARGET/.claude/commands/feature.md"
   check_pair "$TEMPLATES/claude/commands/toolkit-update.md.tmpl" "$TARGET/.claude/commands/toolkit-update.md"
   check_pair "$TEMPLATES/codex/AGENTS.md.tmpl"              "$TARGET/AGENTS.md"
   check_pair "$TEMPLATES/codex/agents/planner.toml.tmpl"   "$TARGET/.codex/agents/planner.toml"
   [ -z "$CODEX_TESTER_MODEL" ] || check_pair "$TEMPLATES/codex/agents/tester.toml.tmpl" "$TARGET/.codex/agents/tester.toml"
   [ -z "$CODEX_REVIEWER_MODEL" ] || check_pair "$TEMPLATES/codex/agents/reviewer.toml.tmpl" "$TARGET/.codex/agents/reviewer.toml"
+  [ -z "$CODEX_REVIEWER_FALLBACK_MODEL" ] || check_pair "$TEMPLATES/codex/agents/reviewer-fallback.toml.tmpl" "$TARGET/.codex/agents/reviewer-fallback.toml"
   check_pair "$TEMPLATES/codex/agents/codex-dev.toml.tmpl" "$TARGET/.codex/agents/codex-dev.toml"
   check_pair "$TEMPLATES/codex/rules/pipeline.rules.tmpl" "$TARGET/.codex/rules/pipeline.rules"
   check_pair "$TEMPLATES/codex/hooks.json.tmpl" "$TARGET/.codex/hooks.json"
@@ -550,12 +578,14 @@ render() {
 
 render "$TEMPLATES/claude/agents/planner.md.tmpl"    "$TARGET/.claude/agents/planner.md"
 render "$TEMPLATES/claude/agents/senior-dev.md.tmpl" "$TARGET/.claude/agents/senior-dev.md"
+[ -z "$CLAUDE_REVIEWER_MODEL" ] || render "$TEMPLATES/claude/agents/reviewer.md.tmpl" "$TARGET/.claude/agents/reviewer.md"
 render "$TEMPLATES/claude/commands/feature.md.tmpl"  "$TARGET/.claude/commands/feature.md"
 render "$TEMPLATES/claude/commands/toolkit-update.md.tmpl" "$TARGET/.claude/commands/toolkit-update.md"
 render "$TEMPLATES/codex/AGENTS.md.tmpl"              "$TARGET/AGENTS.md"
 render "$TEMPLATES/codex/agents/planner.toml.tmpl"   "$TARGET/.codex/agents/planner.toml"
 [ -z "$CODEX_TESTER_MODEL" ] || render "$TEMPLATES/codex/agents/tester.toml.tmpl" "$TARGET/.codex/agents/tester.toml"
 [ -z "$CODEX_REVIEWER_MODEL" ] || render "$TEMPLATES/codex/agents/reviewer.toml.tmpl" "$TARGET/.codex/agents/reviewer.toml"
+[ -z "$CODEX_REVIEWER_FALLBACK_MODEL" ] || render "$TEMPLATES/codex/agents/reviewer-fallback.toml.tmpl" "$TARGET/.codex/agents/reviewer-fallback.toml"
 render "$TEMPLATES/codex/agents/codex-dev.toml.tmpl" "$TARGET/.codex/agents/codex-dev.toml"
 render "$TEMPLATES/codex/rules/pipeline.rules.tmpl" "$TARGET/.codex/rules/pipeline.rules"
 render "$TEMPLATES/codex/hooks.json.tmpl" "$TARGET/.codex/hooks.json"

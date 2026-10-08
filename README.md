@@ -160,12 +160,13 @@ migrations/           hand-appliable notes for [contract] changes only
 integrations/herdr/   optional plugin: adopt an existing lead, show task records,
                        and add support panes without requiring team.sh
 templates/             every generated file, with __PLACEHOLDER__ tokens
-  claude/agents/        planner.md.tmpl, senior-dev.md.tmpl
+  claude/agents/        planner.md.tmpl, senior-dev.md.tmpl; reviewer.md.tmpl for a
+                          claude/* reviewer or fallback
   claude/commands/      feature.md.tmpl — the /feature pipeline command;
                           toolkit-update.md.tmpl — the /toolkit-update merge command
   codex/                AGENTS.md.tmpl, project-scoped planner and codex-dev
-                          (implementer) agents, optional read-only reviewer and
-                          tester agents, reviewed lifecycle hooks, execution rules
+                          (implementer) agents, optional read-only reviewer,
+                          fallback reviewer and tester agents, reviewed lifecycle hooks, execution rules
                           for the dispatch wrappers, and feature/toolkit-update skills
   opencode/agents/       builder, reviewer, tester (workers); leader, planner —
                           native V2 lead adapters

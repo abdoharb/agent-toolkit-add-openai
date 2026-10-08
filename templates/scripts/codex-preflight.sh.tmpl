@@ -37,16 +37,21 @@ if grep -qE '^reviewer_model: *codex/' .pipeline/.toolkit-version 2>/dev/null; t
   [ -f .codex/agents/reviewer.toml ] || die "reviewer_model is codex/* but .codex/agents/reviewer.toml is missing"
   grep -q '^sandbox_mode = "read-only"' .codex/agents/reviewer.toml || die "Codex reviewer is not read-only"
 fi
+# Same for the fallback reviewer the lead switches to for vendor independence.
+if grep -qE '^reviewer_fallback_model: *codex/' .pipeline/.toolkit-version 2>/dev/null; then
+  [ -f .codex/agents/reviewer-fallback.toml ] || die "reviewer_fallback_model is codex/* but .codex/agents/reviewer-fallback.toml is missing"
+  grep -q '^sandbox_mode = "read-only"' .codex/agents/reviewer-fallback.toml || die "Codex fallback reviewer is not read-only"
+fi
 # The project rules let the dispatch wrappers run outside the sandbox without
 # a prompt per call. Missing is allowed (approval then happens per command).
 [ -f .codex/rules/pipeline.rules ] \
   || printf 'codex-preflight.sh: note: .codex/rules/pipeline.rules is missing; every scripts/oc.sh call will need its own runtime approval\n' >&2
 # A claude/* reviewer is dispatched through scripts/claude-review.sh, which
 # needs the Claude CLI and the reviewer agent; check now, not at step 3.
-if grep -qE '^reviewer_model: *claude/' .pipeline/.toolkit-version 2>/dev/null; then
-  command -v claude >/dev/null 2>&1 || die "reviewer_model is claude/* but the claude CLI is not installed"
+if grep -qE '^reviewer(_fallback)?_model: *claude/' .pipeline/.toolkit-version 2>/dev/null; then
+  command -v claude >/dev/null 2>&1 || die "a claude/* reviewer or fallback is configured but the claude CLI is not installed"
   for path in scripts/claude-review.sh .claude/agents/reviewer.md; do
-    [ -f "$path" ] || die "reviewer_model is claude/* but $path is missing"
+    [ -f "$path" ] || die "a claude/* reviewer or fallback is configured but $path is missing"
   done
 fi
 grep -q '^name = "planner"' .codex/agents/planner.toml || die "planner definition has no planner name"

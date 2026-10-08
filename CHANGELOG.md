@@ -12,6 +12,27 @@ script, flag, or role rule; **PATCH** = prose and docs.
 
 ## Unreleased
 
+- `[safety]` A `claude/*` reviewer was required but never scaffolded: the
+  flow, `claude-review.sh` and the Codex preflight all need
+  `.claude/agents/reviewer.md`, and `init.sh` had no template for it, so a
+  fresh `--reviewer-model claude/<model>` project could not run step 3 under
+  any lead. New `templates/claude/agents/reviewer.md.tmpl` (tools: Read,
+  Grep, Glob, Bash; no Edit/Write; follows `.opencode/agents/reviewer.md`), rendered when
+  the reviewer or the fallback is `claude/*`.
+- `[safety]` `claude-review.sh` turned `claude/sonnet` into the invalid model
+  `claude-sonnet`. Ids now map the same way in `init.sh` and the script: an
+  alias (`sonnet`) or a full id (`claude-opus-5-5`) is kept, a bare version
+  id (`opus-5-5`) gets `claude-`. The script also runs a `claude/*` fallback
+  when the primary reviewer is not Claude.
+- `[process]` `--reviewer-fallback-model codex/<model>` scaffolds
+  `.codex/agents/reviewer-fallback.toml` (agent `reviewer_fallback`,
+  read-only sandbox); before, a Codex fallback was silently ignored. The flow
+  now says how to dispatch each fallback runtime, and the Codex preflight
+  checks Codex and Claude fallbacks the same way as primaries.
+- `[process]` `verify-models.sh` checks `codex/*` ids, plus a pinned
+  `codex_model` / `codex_planner_model`, against `codex debug models` instead
+  of skipping them, so a mistyped Codex tester fails at preflight rather than
+  at spawn. Without the codex CLI it reports them as not checked.
 - `[safety]` OpenCode role templates no longer carry a `patch:` permission
   key. opencode v2 folds `patch` into `edit`, appending it as a final rule
   over every path: the tester's `patch: deny` overrode its `.pipeline/**`

@@ -57,10 +57,23 @@ command -v claude >/dev/null 2>&1 || die "claude CLI not installed"
 # The manifest names the reviewer as `claude/<model>`; the CLI wants
 # `claude-<model>`. Anything else means the reviewer is not a Claude role and
 # belongs to oc.sh, not here.
+# The Claude reviewer is the configured reviewer when that is claude/*, or the
+# fallback when only the fallback is (the lead switched to it for vendor
+# independence). Mapping matches bin/init.sh: an alias (`sonnet`) or a full id
+# (`claude-opus-5-5`) is kept; a bare version id (`opus-5-5`) gets `claude-`.
 REVIEWER_MODEL="$(sed -n 's/^reviewer_model: *//p' .pipeline/.toolkit-version 2>/dev/null | head -1)"
+FALLBACK_MODEL="$(sed -n 's/^reviewer_fallback_model: *//p' .pipeline/.toolkit-version 2>/dev/null | head -1)"
 case "$REVIEWER_MODEL" in
-  claude/*) MODEL="claude-${REVIEWER_MODEL#claude/}" ;;
-  *) die "reviewer_model in .pipeline/.toolkit-version is '${REVIEWER_MODEL:-unset}', not claude/* — dispatch the reviewer through scripts/oc.sh instead" ;;
+  claude/*) CLAUDE_ID="${REVIEWER_MODEL#claude/}" ;;
+  *) case "$FALLBACK_MODEL" in
+       claude/*) CLAUDE_ID="${FALLBACK_MODEL#claude/}" ;;
+       *) die "neither reviewer_model ('${REVIEWER_MODEL:-unset}') nor reviewer_fallback_model ('${FALLBACK_MODEL:-unset}') in .pipeline/.toolkit-version is claude/* — not claude/*, so dispatch the reviewer through scripts/oc.sh instead" ;;
+     esac ;;
+esac
+case "$CLAUDE_ID" in
+  claude-*) MODEL="$CLAUDE_ID" ;;
+  *-*) MODEL="claude-$CLAUDE_ID" ;;
+  *) MODEL="$CLAUDE_ID" ;;
 esac
 
 OUT=".pipeline/$TASK.review-$PASS.out"
