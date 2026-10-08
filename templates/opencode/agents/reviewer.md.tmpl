@@ -11,6 +11,8 @@ temperature: 0.1
 # scoping edit/write to the state-file directory, e.g.:
 #   edit:  { "*": deny, ".pipeline/**": allow }
 #   write: { "*": deny, ".pipeline/**": allow }
+# (That works only because this block has no `patch:` key; see the note in
+# the permission block below.)
 # Do NOT do this on faith. Verify it live first: dispatch this agent once and
 # have it try to edit a source file (must be refused) and edit a scratch file
 # under .pipeline/ (must succeed). A permission block that looks right in YAML
@@ -46,7 +48,12 @@ temperature: 0.1
 permission:
   edit: deny
   write: deny
-  patch: deny
+  # No `patch:` key, on purpose. opencode v2 folds the `patch` permission
+  # into `edit`, so a `patch:` line is appended as a final rule over every
+  # path and overrides the edit/write map above. A trailing `patch: deny`
+  # left a tester unable to write its own results (verified live via
+  # `GET /api/agent` and fixed by removing it); `patch: allow` would just as
+  # silently widen a scoped edit map. Re-verify live after any change here.
   read: allow
   glob: allow
   grep: allow

@@ -27,6 +27,7 @@ bash test/smoke.sh        # scaffolder guarantees + the two structural scripts
 bash test/invariants.sh   # every load-bearing rule present in every copy
 bash test/codex.sh        # generated launcher/hooks/preflight, no model calls
 python3 test/herdr.py     # optional host adapter; fake Herdr, no agents or LLM calls
+bash test/opencode-live.sh # opt-in: real `opencode serve`, live role rulesets, no LLM calls
 ```
 
 `smoke.sh` scaffolds into a throwaway directory and asserts the core

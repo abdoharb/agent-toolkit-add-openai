@@ -17,7 +17,12 @@ permission:
     "*": deny
     "__TEST_DIR__/**": allow
     ".pipeline/**": allow
-  patch: deny
+  # No `patch:` key, on purpose. opencode v2 folds the `patch` permission
+  # into `edit`, so a `patch:` line is appended as a final rule over every
+  # path and overrides the edit/write map above. A trailing `patch: deny`
+  # left a tester unable to write its own results (verified live via
+  # `GET /api/agent` and fixed by removing it); `patch: allow` would just as
+  # silently widen a scoped edit map. Re-verify live after any change here.
   question: deny
   todowrite: allow
   task: deny

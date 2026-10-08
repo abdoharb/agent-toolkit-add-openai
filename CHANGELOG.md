@@ -12,6 +12,21 @@ script, flag, or role rule; **PATCH** = prose and docs.
 
 ## Unreleased
 
+- `[safety]` OpenCode role templates no longer carry a `patch:` permission
+  key. opencode v2 folds `patch` into `edit`, appending it as a final rule
+  over every path: the tester's `patch: deny` overrode its `.pipeline/**`
+  allow and left it unable to write its own results (verified live in a
+  downstream project via `GET /api/agent`, fixed by removing the line). The
+  builder's `patch: allow` would have silently widened any scoped edit map,
+  and the reviewer's `patch: deny` would have blocked its documented
+  `.pipeline/**` write option. Downstream: delete the `patch:` line from
+  `.opencode/agents/{builder,reviewer,tester}.md`, restart the server, and
+  confirm with `GET /api/agent` that each role's last `edit` rule is the
+  intended one. A smoke check keeps the key from coming back, and the new
+  opt-in `test/opencode-live.sh` starts a real `opencode serve` in a scratch
+  scaffold and checks the live resolved rules (no model calls): on opencode
+  v2.0.23 it fails on the old templates (tester `.pipeline/**` → deny) and
+  passes on the fixed ones.
 - `[safety]` `init.sh --update` (and `--refresh-stamp` and bootstrap) died
   silently with exit 1 on any stamp written before `builder_auto` existed: a
   false `[ … ] && printf` as the stamp loop's last command became the

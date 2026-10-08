@@ -105,6 +105,13 @@ done
 [ ! -d "$TMP/.opencode/agent" ] || fail "fresh scaffold wrote the legacy singular OpenCode role directory"
 [ -x "$TMP/scripts/verify-models.sh" ] || fail "verify-models.sh missing or not executable"
 ok "OpenCode V2 roles and live model verifier were scaffolded"
+# opencode v2 folds `patch` into `edit`: any `patch:` key becomes a final
+# rule over every path and silently overrides the role's edit/write scope.
+for role in builder reviewer tester; do
+  ! grep -qE '^[[:space:]]+patch:' "$TMP/.opencode/agents/$role.md" \
+    || fail "$role.md has a patch: permission key that overrides its edit scope on opencode v2"
+done
+ok "OpenCode worker roles carry no patch: key that would override their edit scope"
 
 MODEL_BIN="$TMP/modelbin"
 mkdir "$MODEL_BIN"

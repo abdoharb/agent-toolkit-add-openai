@@ -771,3 +771,16 @@ false and killed the script before it printed anything. Write such helpers
 with `if`, test the triage against inputs written by older versions, and
 tell the lead that a non-zero exit without the expected summary is a
 failure to report, never a clean result.
+
+## 38. A permission alias can silently become a catch-all rule
+
+A runtime may fold one permission name into another: on the dispatch tool
+used here, a newer major version treats the old "patch" permission as part
+of "edit". A config that still carries the old key does not get an error. Its
+value is appended as a final rule over every path, and because the last
+matching rule wins, a `deny` there quietly overrides a scoped allow (a tester
+could no longer write its own results) and an `allow` would just as quietly
+widen a scoped deny. After any runtime major upgrade, read the live, resolved
+ruleset rather than the config file, check that the last matching rule for
+each role's write scope is the one you intended, and remove keys the runtime
+now treats as aliases. Add a structural check so the old key cannot return.
