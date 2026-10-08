@@ -59,6 +59,14 @@ files="$(find "$TMP" -type f -not -name run1.log \
 ok "every reported write produced exactly one file ($files rendered + stamp)"
 
 grep -q '^builder_auto:  ask$' "$TMP/.pipeline/.toolkit-version" || fail "stamp lacks the default builder_auto: ask"
+# A stamp written before its newest key existed must still drive --update.
+OLDSTAMP="$(mktemp -d "${TMPDIR:-/tmp}/toolkit-oldstamp.XXXXXX")"
+bash "$ROOT/bin/init.sh" --target "$OLDSTAMP" --project-name smoke > /dev/null 2>&1
+sed -i.bak '/^builder_auto:/d' "$OLDSTAMP/.pipeline/.toolkit-version" && rm -f "$OLDSTAMP/.pipeline/.toolkit-version.bak"
+rc=0; out="$(bash "$ROOT/bin/init.sh" --update --target "$OLDSTAMP" 2>&1)" || rc=$?
+{ [ "$rc" -eq 0 ] && grep -q 'up to date' <<< "$out"; } \
+  || fail "--update died on a stamp without builder_auto (rc=$rc): $out"
+ok "--update reads a stamp that predates its newest key"
 for field in 'OpenCode builder session id' 'OpenCode reviewer session id' 'OpenCode tester session id' \
   'Codex tester thread id' 'Codex implementer thread id' 'Codex reviewer thread id'; do
   grep -q "^\*\*$field:\*\*" "$TMP/.pipeline/TEMPLATE.md" || fail "state template lacks the per-role field: $field"

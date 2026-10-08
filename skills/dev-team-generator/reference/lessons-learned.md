@@ -759,3 +759,15 @@ Audit those mechanics directly rather than re-reading the flow:
   per unfinished task from the state files, as a pointer the resumed lead must
   still verify. Keep per-prompt hooks silent so they do not grow the lead's
   context.
+
+## 37. A triage command must not share an exit code with its own crash
+
+An update check that exits 1 for "drift found" and also exits 1 when it dies
+gives the lead two indistinguishable outcomes, and a lead that sees exit 1
+with an empty summary will report "nothing to update". This happened: a
+shell `set -e` script ended a helper function with `[ test ] && assign`, so a
+missing optional key in an older provenance file made the function return
+false and killed the script before it printed anything. Write such helpers
+with `if`, test the triage against inputs written by older versions, and
+tell the lead that a non-zero exit without the expected summary is a
+failure to report, never a clean result.

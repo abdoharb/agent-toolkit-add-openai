@@ -12,6 +12,13 @@ script, flag, or role rule; **PATCH** = prose and docs.
 
 ## Unreleased
 
+- `[safety]` `init.sh --update` (and `--refresh-stamp` and bootstrap) died
+  silently with exit 1 on any stamp written before `builder_auto` existed: a
+  false `[ … ] && printf` as the stamp loop's last command became the
+  function's status under `set -e`. A lead then reported "no drift" for a
+  project that had 4 new and 19 changed files. Fixed with `if`, covered by a
+  smoke test, and `/toolkit-update` now treats exit 1 without a file list as a
+  failure.
 - `[contract]` Codex-native implementer and reviewer. The state template adds
   `codex-dev` to *Owner right now* / *Implementer for this task* and two
   fields, *Codex implementer thread id* and *Codex reviewer thread id*.
