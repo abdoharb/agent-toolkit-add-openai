@@ -1,17 +1,19 @@
 # System — read this first, whatever AI or tool you are
 
-One file, meant to be handed to **any** AI coding tool (Codex, Gemini,
-or whatever you're running) with an instruction like "recreate this
+One file, meant to be handed to **any** AI coding tool (Claude, Codex,
+Gemini, whatever you're running) with an instruction like "recreate this
 system, with yourself as the lead." It gives you the *shape* of the whole
 pipeline compactly, so you don't pay to read every file in `templates/` up
 front — pull in a specific template's full text only once you actually need
 that role's exact prose, using the paths cited below.
 
 **Do not copy any template file byte-for-byte assuming it fits your tool.**
-Codex and OpenCode both discover custom agent files per repo; not every
-tool does, and permission models differ in shape,
-not just detail (a per-command allow/deny/ask map is not the same kind of
-thing as one coarse sandbox flag). Read `docs/ADDING-A-TOOL.md` before
+Claude Code, Codex, and OpenCode discover custom agent files per-repo, but their
+formats and permission models differ in shape, not just detail (a per-command
+allow/deny/ask map is not the same kind of thing as one coarse sandbox flag).
+Codex project agents live under `.codex/agents/`, project skills under
+`.agents/skills/`, and project instructions in `AGENTS.md`. Read
+`docs/ADDING-A-TOOL.md` before
 assuming a mechanism transfers — check your actual tool's real config and
 capability surface first, the same way this toolkit's own worker-role
 ports did, and recreate the *behavior*, adapted to what your tool can
@@ -38,7 +40,7 @@ actually enforce, rather than pasting a file in and hoping.
   Never fixes anything, never edits source.
 
 **The state file is the only handoff surface.** One file per task/feature —
-`.agents/T-<id>.md`, shape at `templates/agents-state/TEMPLATE.md.tmpl` —
+`.pipeline/T-<id>.md`, shape at `templates/agents-state/TEMPLATE.md.tmpl` —
 holding Status, Goal, Acceptance criteria, Files in scope, a Decisions log,
 Review verdicts, Test results, Findings for docs, and Open questions.
 Nothing is passed between roles by prose alone: if a fact isn't written in
@@ -52,8 +54,9 @@ with only a short status: a verdict line, a pass/fail count, or the one-line
 <role>`). The lead reads that one line between steps instead of re-reading
 the whole file, and opens it in full only on a verification failure or a
 real decision. This is what keeps the lead's own context flat across a long
-run — see `templates/codex/skills/feature/SKILL.md.tmpl`'s "Token
-discipline" section for the reasoning in full.
+run — see `templates/claude/commands/feature.md.tmpl`'s "Token discipline"
+section for the reasoning in full, even though that file's own format is
+Claude-Code-specific.
 
 **Nobody may declare their own work done — and someone must declare it.**
 The acceptance criteria are the contract; a criterion nobody records an
@@ -94,6 +97,13 @@ spec every role treats as the contract should not get zero.
 Dispatching another agent to check an agent's structural output is a paid
 call that adds a component that can misjudge the same way the one it's
 checking can. Prefer the script.
+
+Have the reviewer emit a machine-readable verdict line — `VERDICT: PASS` /
+`VERDICT: CHANGES_REQUESTED` as the first line of its reply — and **branch
+on that line**, not on its findings prose or the raw event stream. Have the
+structural check also fail when a task has reached review with no filled
+verdict on record, so a missing or malformed verdict is caught from both
+the reply and the file.
 
 **Permission is least-privilege per role, verified live, not assumed.**
 Whatever your tool's capability model actually is, give the reviewer
@@ -137,10 +147,13 @@ Record **who decided** (`agent` | `human`) next to it — and record, don't
 act: a class never changes session policy, permissions, or budgets
 mid-task.
 
-**Session scope is one task, for all sub-agents alike:** same task → same
-session (implement, review, test continue it); new task → new session. A
-fresh session per reviewer/tester re-reads every file from scratch — that
-burns the context reuse exists to save.
+**Session scope is one task per role:** same task and same role → same
+session (a retry continues it); another role → its own session, recorded in
+its own state-file field; new task → new sessions. Sharing one session across
+implement, review and test broke on opencode v2 (a session pins the tool set
+of the agent that opened it, so a tester in the builder's session could not
+write its results) and fed the reviewer the builder's reasoning instead of
+just the diff.
 
 **A second review pass closes the first, it does not restart it:** every
 earlier finding marked fixed, withdrawn, disputed (answering the author's
@@ -166,6 +179,18 @@ loop at all: route it to the test/verification step as an explicit thing
 to check, logged in the state file so the human can see and disagree —
 never silently downgraded. Never merge without asking. Any new permission
 or dependency, however reasonable it looks, gets asked about too.
+
+**Only the lead commits, and only once the user has approved the merge** —
+every implementer's write scope hard-denies `git commit`/`git push` so this
+stays the one git-mutating action in the whole pipeline, gated on a human
+yes. When you do, stage the state file alongside the code (so the commit
+carries the spec, decisions, findings, and test results together, not
+scattered across an un-versioned file) and **tag the commit with the task
+id** — `[T-<id>]` leading the subject line, or appended if the project's
+own commit convention already owns that position. It has to be in the
+one-line subject, not just the body, so `git log --oneline` / `git blame`
+show it and a later `git log --grep` finds every commit for a task from
+whatever incident sends someone looking.
 
 **Keep the project's main tracking doc current, always, not only at
 completion.** A status board / task list / equivalent, updated at the end
@@ -199,7 +224,7 @@ takes them as required arguments rather than assuming:
 2. **Cross-vendor independence for review, specifically.** The reviewer
    must not share a vendor/model family with whoever implemented — ask for
    a reviewer model and a *fallback* reviewer model in a different family,
-   the same way `templates/opencode/agent/reviewer.md.tmpl`'s consumer
+   the same way `templates/opencode/agents/reviewer.md.tmpl`'s consumer
    does, for whenever the two would otherwise collide.
 3. **Source directories you're allowed to touch as implementer**, and
    anything explicitly off-limits without an Open Question first.
@@ -218,13 +243,13 @@ mechanism. You need three things:
 
 0. **First, check whether this project was just scaffolded.** If a
    first-run customization marker exists (this toolkit writes
-   `.agents/.needs-customization`), the role files still carry generic
+   `.pipeline/.needs-customization`), the role files still carry generic
    pitfalls/hard-rules text rather than this codebase's real ones — do that
    customization pass with the human before running anything, then delete
    the marker. It is written once, on a fresh scaffold only, and the check
-   otherwise lives in the Codex `$feature` skill that another lead may
-   never execute.
-1. **A way to read and write `.agents/T-<id>.md`** — any tool with file
+   otherwise lives in a Claude-Code-specific command file that you, as a
+   different lead, will never execute.
+1. **A way to read and write `.pipeline/T-<id>.md`** — any tool with file
    access can do this.
 2. **A way to run each worker role** — either do the work yourself inline
    (weaker: no cross-vendor independence for review), or shell out to a
@@ -232,25 +257,33 @@ mechanism. You need three things:
    thin CLI wrapper that passes a role's instructions and a model choice to
    another agent process and gets its final text back, nothing more exotic
    than that.
-3. **The discipline rules above**, actually followed — the short-reply
+3. **A live preflight for the worker runtime** — resolve every configured
+   model id against the actual provider before dispatch. After a runtime
+   restart, upgrade, role-path migration, or permission edit, inspect the
+   live role/capability ruleset too: confirm every required role loaded and
+   that last-match-wins permission ordering preserves the intended write
+   boundary. Configuration that merely looks correct is not enforcement
+   evidence.
+4. **The discipline rules above**, actually followed — the short-reply
    convention, the loop cap, the stop-and-ask list.
 
 For the exact orchestration *sequence* (preflight checks → dispatch planner
 → show the spec and wait for approval → implement → review loop → test →
 report and ask before merging), read
-`templates/codex/skills/feature/SKILL.md.tmpl` end to end. Its skill
-frontmatter may not apply to your tool, but the sequence and stop-and-ask
-list are tool-agnostic.
+`templates/claude/commands/feature.md.tmpl` end to end. Its file format
+(Claude Code's slash-command frontmatter) won't apply to you, but the
+sequence and the stop-and-ask list in it are tool-agnostic — that's the
+part to actually adopt.
 
 For a given worker role's exact prose (its hard rules, working rhythm,
 report format), read the closest existing template as a **style
 reference**, not a copy target:
 
-- `templates/codex/agents/planner.toml.tmpl` — planner
-- `templates/codex/agents/senior-dev.toml.tmpl` or
-  `templates/opencode/agent/builder.md.tmpl` — implementer
-- `templates/opencode/agent/reviewer.md.tmpl` — reviewer
-- `templates/opencode/agent/tester.md.tmpl` — tester
+- `templates/claude/agents/planner.md.tmpl` — planner
+- `templates/claude/agents/senior-dev.md.tmpl` or
+  `templates/opencode/agents/builder.md.tmpl` — implementer
+- `templates/opencode/agents/reviewer.md.tmpl` — reviewer
+- `templates/opencode/agents/tester.md.tmpl` — tester
 
 Adapt each to what your own tool can actually enforce or actually do —
 research your tool's real config and capability surface first (don't
@@ -260,9 +293,13 @@ recreate the behavior, don't paste the file.
 
 ## If you're scaffolding into a fresh repo, not just orienting yourself
 
-`bin/init.sh` renders the Codex and OpenCode templates into a target repo
-mechanically (see README's "Quick start"). Use it if your tool is one of
-those two; otherwise this file plus `docs/ADDING-A-TOOL.md` is the path —
-there's no flag for "generate my tool's shim," it's a research step
-followed by a small, real file, same as every tool that's here today
-started out.
+`bin/init.sh` renders Claude, Codex-lead, and OpenCode templates into a target
+repo mechanically (see README's "Quick start"). The Codex adapter consists of
+root `AGENTS.md`, a project-scoped planner, and `feature` / `toolkit-update`
+skills; it executes the same canonical flow as Claude. For any other tool, this
+file plus `docs/ADDING-A-TOOL.md` is the path — there's no flag for "generate my
+tool's shim," so research its real discovery and permission surfaces first.
+
+Record approvals in the Decisions log. On restart or compaction, recover
+status, counters, approvals, and worker activity from the task record before
+dispatching. Do not repeat recorded approvals or start a competing writer.

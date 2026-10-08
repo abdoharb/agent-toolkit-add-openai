@@ -3,30 +3,357 @@
 Impact tags, in descending order of "drop what you are doing":
 `[contract]` › `[safety]` › `[process]` › `[docs]`.
 
-A downstream project (or its AI lead — run `$toolkit-update`) reads this
-file *first* and the diffs second. See `docs/UPGRADING.md` for the full
+A downstream project (or its AI lead — run `/toolkit-update` in Claude or
+`$toolkit-update` in Codex) reads this file *first* and the diffs second. See
+`docs/UPGRADING.md` for the full
 update workflow. Version bumps mean: **MAJOR** = state-file contract /
 role authority / script interface changed; **MINOR** = new template,
 script, flag, or role rule; **PATCH** = prose and docs.
 
-## Unreleased — 2026-09-01
+## Unreleased
 
-- `[contract]` Replaced the Claude Code scaffold with native Codex project
-  agents and repository skills. Planner and reviewer fallback use
-  `gpt-5.6-sol`; the Codex implementer uses `gpt-5.6-terra`. Generated
-  destinations are now `.codex/config.toml`, `.codex/agents/*.toml`, and
-  `.agents/skills/{feature,toolkit-update}/SKILL.md`. Migration:
-  `migrations/02-codex-sol-terra.md`.
-- `[contract]` Replaced `--claude-model` and
-  `--reviewer-fallback-model` with optional `--codex-sol-model` and
-  `--codex-terra-model` flags. The new flags default to the official model
-  IDs above and are recorded in `.agents/.toolkit-version`.
-- `[process]` `scripts/team.sh` now starts a Codex Sol lead and resumes with
-  `codex resume --last`; OpenCode remains the cross-vendor builder,
-  reviewer, and tester path.
-- `[docs]` Renamed root toolkit guidance from `CLAUDE.md` to `AGENTS.md`
-  and updated the active documentation, skills, tests, and state contract
-  for Codex.
+- `[contract]` Codex-native implementer and reviewer. The state template adds
+  `codex-dev` to *Owner right now* / *Implementer for this task* and two
+  fields, *Codex implementer thread id* and *Codex reviewer thread id*.
+  `.codex/agents/codex-dev.toml` is always scaffolded: on the user's request
+  it implements under `.claude/agents/senior-dev.md`'s contract, and its
+  `workspace-write` sandbox keeps `.git` read-only. `--reviewer-model
+  codex/<model>` scaffolds `.codex/agents/reviewer.toml` with
+  `sandbox_mode = "read-only"` under `.opencode/agents/reviewer.md`'s
+  contract; the lead pastes its reply. Reviewer independence now compares the
+  implementer's vendor family (Claude, OpenAI/Codex, or the builder's
+  provider), and the "native subagent this lead cannot spawn" rule covers
+  the reviewer as well as the tester. Migration:
+  `migrations/05-codex-native-roles.md`.
+- `[safety]` New `.codex/rules/pipeline.rules`: a project execution-rules
+  allowlist for exactly `scripts/oc.sh`, `scripts/bg-dispatch.sh`,
+  `scripts/claude-review.sh` and `scripts/verify-models.sh`, so a Codex lead
+  stops needing a runtime approval at every dispatch, status check and wait.
+  Effective only in a trusted project. Git writes and the sandbox-testing
+  preflight still prompt. A plain `init.sh` re-run adds it, so review it like a
+  hook; it is a permission change under the update gate. Checked offline with
+  `codex execpolicy check` in `test/codex-sandbox.sh`; verify live before
+  relying on it.
+- `[process]` `bg-dispatch.sh start … --retry-on-limit <seconds> -- …`: a
+  detached loop that reruns a dispatch only while it fails on a usage cap,
+  rate limit, quota or 429 (never a timeout), up to `BG_RETRY_MAX` (48)
+  attempts. Each failed attempt is kept in the `.err` file with an
+  `[attempt N]` prefix so it cannot read as completion; `wait` shows the
+  latest retry note. This is the canonical 30-minute retry for a lead with no
+  scheduler. Previously a Codex lead could only stop and wait for a human.
+- `[process]` `codex-preflight.sh` exits 3 when every check passed except the
+  OpenCode API probe from inside the sandbox and the project rules exist. The
+  lead then runs `scripts/oc.sh --status` outside the sandbox. Preflight also
+  checks a `codex/*` reviewer's agent file is read-only.
+- `[process]` The Codex session hook stays silent on every prompt and, at
+  session start, prints one line per unfinished task (Status, Latest handoff,
+  Blocked since) as a recovery pointer. Renewed `/hooks` trust is needed.
+- `[process]` Codex feature skill: poll the same unified-exec session while
+  `wait` runs instead of starting a second `wait`; use the project rules by
+  repo-relative path; use the native implementer/reviewer. First-run
+  customization now includes `.codex/agents/`.
+- `[process]` `test/invariants.sh` now covers the Codex implementer,
+  reviewer, tester, rules file, vendor-family independence, and the
+  scheduler-free retry (147 pairs).
+
+- `[contract]` OpenCode sessions are scoped **per role per task**, not per
+  task. The state file's single *OpenCode session id* becomes *OpenCode
+  builder session id*, *OpenCode reviewer session id* and *OpenCode tester
+  session id* (plus *Codex tester thread id*); each role's first call starts
+  its own session and only its own retry reuses it. Sharing one session broke
+  on opencode v2 (a session pins the opening agent's tool set, so the tester
+  could not write its results) and fed the reviewer the builder's reasoning.
+  SYSTEM.md, the invariant rule, the dev-team-generator references, `oc.sh`,
+  and the OpenCode lead follow. Migration: `migrations/04-per-role-sessions.md`.
+- `[process]` Every task gets its own branch (`T-<id>-<slug>`, keeping any
+  project prefix) before an implementer runs, so each merge gate proposes
+  exactly one PR.
+- `[process]` `init.sh --builder-auto ask|on` stamps `builder_auto` in
+  `.pipeline/.toolkit-version`. `on` is a standing user decision: builder
+  dispatches pass `--auto` without a per-task question; `ask` (default) keeps
+  the spec-time question. The flow now names the builder's `deny` list as the
+  only thing `--auto` does not approve.
+
+- `[process]` Codex-lead parity with the Claude lead. New
+  `scripts/bg-dispatch.sh` (`start`/`wait`) is the detached-dispatch watch for
+  any lead — a Codex lead has no Monitor, so it loops on `wait` instead of
+  losing dispatches to its own exec timeout. New `scripts/claude-review.sh`
+  runs the project's Claude `reviewer` agent headlessly (read-only tool list,
+  Edit/Write refused) so a non-Claude lead can dispatch a `claude/*` reviewer.
+  `scripts/oc.sh` gains `--status` (v2 `/api/session/active`) and
+  `--interrupt` (v2 `/api/session/<id>/interrupt`); the feature flow now uses
+  them instead of raw `opencode api` calls. `codex-preflight.sh` checks the new
+  wrappers and, for a `claude/*` reviewer, the Claude CLI and agent file.
+- `[process]` Canonical feature flow: a *Where the team stopped* status check
+  (board + handoffs + `gh pr list` reconciliation + stale-`main` check); the
+  merge record after a merge; the mid-task model/implementer switch procedure
+  (interrupt, ask keep-vs-discard, update manifest and role file,
+  `verify-models.sh`, fresh session); verifying a role's "concurrent writer"
+  claim before acting on it; the exact `### Pass N — <date> — verdict: <V>`
+  heading `verify-state.sh` keys off; what to do when the lead cannot spawn
+  the configured tester. The Codex feature skill gains the matching
+  adaptations (no Monitor, no structured question tool, headless Claude
+  review, per-task branches, sandboxed `oc.sh`).
+- `[safety]` `promote-findings.sh` skips a *Findings for docs* tag that names
+  a directory instead of aborting the run and silently dropping every later
+  finding.
+- `[process]` `init.sh` ignores `.pipeline/T-*.{out,err,pid,brief}` dispatch
+  traces in a git target.
+- `[process]` A `codex/<model>` tester is now a supported role:
+  `--tester-model codex/<model>` scaffolds `.codex/agents/tester.toml`
+  (report-only tester, model id without the vendor prefix);
+  `verify-models.sh` skips `codex/*` like `claude/*`; `codex-preflight.sh`
+  requires the tester agent when the manifest names one.
+- `[process]` The OpenCode lead dispatches a `claude/*` reviewer through
+  `scripts/claude-review.sh`, waits through `bg-dispatch.sh`, and stops roles
+  with `oc.sh --interrupt`. Generated `AGENTS.md` asks the project to record
+  whether sending review material to Anthropic is authorized.
+
+- `[contract]` Merged upstream v0.10.0 (OpenCode lead, standalone dashboard,
+  Herdr plugin) onto this line without changing the Codex/`.pipeline/`
+  contract: the new OpenCode `leader`/`planner`/commands, `scripts/dashboard`,
+  and the Herdr plugin read and write `.pipeline/` (task records) while
+  skills stay in `.agents/skills/`. Upstream's `.opencode/agent/` worker
+  directory stays retired in favor of `.opencode/agents/`. See below for
+  upstream's own v0.10.0 notes, which still say `.agents/` where they
+  describe the unmodified upstream.
+- `[contract]` OpenCode role templates move from the legacy singular
+  `.opencode/agent/` directory to V2's canonical `.opencode/agents/` path.
+  Plain bootstrap refuses to create a second role tree beside an unmigrated
+  one, while stamp-less update recovery can still read either layout.
+  Migration: `migrations/03-opencode-v2-agents-directory.md`.
+- `[safety]` Fresh scaffolds now include `scripts/verify-models.sh`; feature
+  preflight resolves every OpenCode-dispatched model against the authenticated
+  live server, and instructs the lead to verify (against `/api/agent`) that
+  required roles and their ordered permission rules loaded after restarts,
+  upgrades, migrations, or permission edits — the script checks models, the
+  role check is a lead-run step. Disk configuration alone is no longer treated
+  as readiness evidence.
+- `[contract]` Writable task records, outputs, server credentials, session pins,
+  and logs move from `.agents/` to `.pipeline/` for both leads. Codex protects
+  `.agents/` under its default workspace policy; skills remain at
+  `.agents/skills/`. Migration: `migrations/02-pipeline-directory.md`.
+  Read-only update triage accepts legacy provenance stamps; a plain bootstrap
+  refuses an unmigrated runtime rather than silently creating another one.
+- `[process]` Codex leads capture exact session IDs through reviewed lifecycle
+  hooks, pin them per team name, and resume through `codex-lead.sh`. Failed
+  resumes, missing capture, and concurrent launches stop explicitly. The task
+  template gains an optional Codex planner thread ID for corrections/recovery.
+- `[process]` Added Codex lead/planner model and reasoning flags, defaulting to
+  inheritance and preserved through the provenance stamp. Supporting delegate,
+  status-board, and karpathy-guidelines skills are now installed deterministically.
+- `[safety]` Codex preflight probes writable state and authenticated OpenCode
+  access from the active sandbox. The adapter distinguishes workflow consent
+  from runtime permission approval and preserves task/thread state on failure.
+  Update consent explicitly covers Codex permissions, execution rules, and hooks.
+- `[process]` Added no-model behavioral tests for launcher/hook/preflight and
+  migration failures, plus an opt-in real Codex sandbox test. CI runs the
+  behavioral suite. Live model workflow verification remains a documented
+  manual check; these tests do not claim to establish model-level parity.
+- `[docs]` Added `docs/CODEX.md`, migration/recovery guidance, and generalized
+  lessons about protected instruction directories, exact-session identity,
+  lifecycle trust, and separate workflow/runtime approvals.
+
+## v0.10.0 — 2026-10-06
+
+- `[safety]` Corrected earlier permission-verification conclusions in worker
+  templates and `oc.sh`: v2 enforcement remains unverified against the exact
+  generated artifacts. Stale server configuration and altered scratch copies
+  can mislead checks; verify resolved rules and refused actions in a fresh
+  runtime. Permission blocks remain guardrails, not filesystem isolation.
+
+- `[process]` Init now installs self-contained `scripts/dashboard` into target
+  repos, and `--update` / `/toolkit-update` include it in new-file and drift
+  triage. Existing stamped projects add it with a plain flag-free init re-run;
+  existing dashboard customizations and provenance are preserved. The shared
+  dashboard module is host-independent and needs no toolkit checkout to run.
+- `[process]` Added standalone `bin/dashboard`: opens the same visual task
+  dashboard from any macOS/Linux terminal without Herdr or model calls. Finds
+  the nearest `.agents/` directory from cwd, supports `--project` and `--once`,
+  and shares the existing renderer rather than duplicating UI logic.
+- `[process]` The in-Herdr board now uses a colored, scrollable visual terminal
+  UI with pipeline boxes, task cards, acceptance bars, and a blocked-task filter.
+  It uses standard-library curses, not an unsupported embedded webview; plain
+  text remains available for non-interactive output and `--once`.
+- `[safety]` Fixed Herdr dashboard tab creation: target-pane arguments are now
+  supplied only for splits, avoiding Herdr's `invalid_params` rejection for tabs.
+- `[process]` Herdr's task board is now a model-independent live dashboard:
+  pipeline graphs, stage/task counts, blocker and handoff summaries, and recorded
+  acceptance bars refresh from local task files without model calls. Unknown or
+  blocked stages are not guessed; narrow terminal panes wrap the display.
+- `[process]` Added an optional Herdr plugin under `integrations/herdr/` for
+  the normal "start OpenCode and ask it to lead" workflow. Adoption binds the
+  existing pane/session without prompting or relaunching it. Explicit actions
+  can brief an idle lead, show task records, focus the exact native session, or
+  add reusable empty worker/server shells and a board; `team.sh` is not required.
+- `[safety]` Herdr bindings are scoped by server/workspace/project, stored
+  outside project files, and never select the latest worker session. The plugin
+  does not change permissions, send approval keystrokes, launch workers/servers,
+  run verification scripts implicitly, or equate Herdr's done badge with task
+  acceptance. Mocked adapter tests make no LLM calls; live integrations and
+  permissions still require manual verification.
+- `[process]` OpenCode can lead the scaffolded pipeline without a Claude or
+  Codex CLI: new native V2 `leader`/`planner` adapters and `/feature` /
+  `/toolkit-update` commands reference the canonical Claude instruction files
+  instead of duplicating role policy. Existing worker files and session policy
+  remain unchanged. The optional project handoff is historical context, not an
+  implicit override of the pipeline.
+- `[process]` `team.sh --lead opencode` launches the interactive OpenCode lead
+  against the same authenticated server as its workers. Auto selection now
+  falls back to OpenCode after Claude and Codex. OpenCode starts a fresh lead
+  chat unless `TEAM_OPENCODE_SESSION` supplies an explicit lead id; `--fresh`
+  ignores that id. It never uses `--continue` to accidentally resume a worker.
+- `[safety]` The new planner denies shell/child dispatch and permits editing
+  task state files only; the leader requests approval for shell actions and
+  edits outside `.agents/**`. These are configuration defaults, not proven
+  runtime isolation: verify resolved permissions and refused actions live.
+- `[docs]` Generalized downstream handoff lessons: distinguish dated context
+  from policy, preserve dispatch evidence, verify served models, and do not
+  confuse the lead's session with worker sessions. No project-specific handoff
+  content or model overrides are imported into the toolkit.
+- `[docs]` Documented `./scripts/dashboard`, `--project`, `--once`, navigation,
+  and additive installation for existing projects in README, the team guide,
+  and the upgrade guide. No Herdr, agent runtime, or model calls are required
+  to view recorded progress.
+
+## v0.9.0 — 2026-09-27
+
+- `[safety]` Synced this toolkit's own opencode v2 migration into the
+  scaffolded pipeline templates: the shell permission key renamed `bash:` →
+  `shell:` in `builder.md.tmpl`/`reviewer.md.tmpl`/`tester.md.tmpl` (under
+  the old key, none of a template's shell `deny`/`ask` rules matched
+  anything under opencode v2, so `rm -rf /*`, `sudo *`, `curl *`, etc. were
+  silently unenforced); `oc.sh.tmpl` now authenticates with
+  `OPENCODE_PASSWORD` (v2's `serve` is always password-gated, v1 had none),
+  polls via `opencode api` against v2's `/api/*` routes, aborts via the
+  renamed `/api/session/<id>/interrupt` endpoint, and picks the *newest*
+  message for watchdog progress instead of the oldest (v2 returns messages
+  newest-first; the old indexing could silently track the wrong message and
+  let a wedged run look like it was still progressing).
+- `[docs]` Corrected an earlier `oc.sh.tmpl`/agent-template comment claiming
+  `--auto` lets a deny-listed shell command run anyway on opencode v2 —
+  re-verified live via `GET /api/agent/<name>` and could not be reproduced;
+  left the correction in place rather than deleting the original claim
+  outright.
+- `[process]` `bin/init.sh` now checks `opencode --version` on every
+  scaffold or `--update` run and warns (non-fatally) when it's missing, v1,
+  or newer than the v2 these templates assume, explaining specifically what
+  breaks on v1 (password auth, the permission-key rename, the `opencode
+  api` subcommand, `--server` replacing the removed `--attach`/`--dir`).
+  `toolkit-update.md.tmpl` now tells the lead to surface this warning to
+  the user rather than let it scroll past.
+- `[process]` `bin/init.sh`'s `--builder-model`, `--reviewer-model`,
+  `--reviewer-fallback-model`, and `--tester-model` are no longer required —
+  `apply_defaults()` now fills them with `opencode-go/glm-5.3-flash` /
+  `opencode-go/minimax-m2.7` / `opencode-go/deepseek-v4-flash` /
+  `hcnsec/auto` when omitted, the same lineup two independently scaffolded
+  projects (resto-agent, relationship) landed on. `--project-name` remains
+  the only required flag; every flag can still be passed explicitly to
+  override the defaults. Backward compatible — a call that already passed
+  all four flags behaves identically.
+- `[safety]` `init.sh` now also adds `.agents/.oc-password` (the local
+  opencode v2 server password `scripts/team.sh` generates) to a scaffolded
+  project's `.gitignore`, alongside the existing `.oc-port` and Claude
+  session-id entries.
+- `[docs]` README's quickstart and `docs/MODELS.md`'s recommended lineup
+  updated to show this lineup as the documented default instead of the
+  older Kimi/GLM-5.2/Sonnet-fallback/DeepSeek-Flash recommendation.
+
+## v0.8.0 — 2026-09-13
+
+- `[process]` Fresh scaffolds now support Codex as the project lead when Claude
+  Code is unavailable. `init.sh` adds a root `AGENTS.md`, repository-scoped
+  `feature` and `toolkit-update` skills, and a source-read-only-by-instruction
+  Codex planner under `.codex/agents/`. Codex's sandbox cannot restrict writes
+  to `.agents/**` alone, so this limitation is explicit. The Codex feature
+  skill is a thin adapter over the
+  canonical Claude feature flow, so lead policy remains one maintained copy.
+- `[process]` `scripts/team.sh` now selects the lead with
+  `--lead auto|claude|codex` (`auto` prefers Claude, then Codex) and resumes the
+  latest repository-scoped Codex session when using the fallback. Existing
+  Claude UUID pinning is unchanged.
+- `[safety]` Plain `bin/init.sh --target .` re-runs now load render values from
+  an existing provenance stamp. This makes the documented missing-file step
+  genuinely flag-free, allowing older scaffolds to install the new Codex files
+  without reconstructing their original model flags or overwriting local
+  customizations. Smoke coverage removes and bootstraps the four Codex files.
+- `[docs]` Corrected the obsolete statement that Codex custom agents are
+  machine-global only; current Codex supports project agents under
+  `.codex/agents/` and project skills under `.agents/skills/`.
+
+## v0.7.0 — 2026-09-11
+
+- `[process]` The lead's commit, once the user approves the merge, now has
+  concrete mechanics instead of stopping at "propose the merge": stage the
+  state file alongside the code (so `git show` on the commit carries the
+  spec, decisions, findings, and test results together) and **tag the
+  commit subject with the task id**, `[T-<id>]` — leading it, or appended
+  if the project's own commit convention already owns that position.
+  Lands in the one-line subject (not just the body) so `git log --oneline`,
+  `git blame`, and `git log --grep '\[T-<id>\]'` all find their way back
+  to `.agents/T-<id>.md`'s full record from an incident later. This was
+  already implicit ("only the lead commits" lived in `senior-dev.md`) but
+  had no explicit instruction anywhere in the lead's own flow. Synced
+  across all three flow copies; `test/invariants.sh` enforces the rule's
+  presence.
+
+## v0.6.0 — 2026-09-10
+
+Closes three role-boundary seams surfaced by a session that drove the
+pipeline end to end. All three are "a script that can't misjudge" fixes,
+not new agents.
+
+- `[safety]` `scripts/verify-state.sh` gains two checks, each enforcing a
+  rule `TEMPLATE.md` already stated but nothing verified:
+  - **Ledger evidence.** `done` is now refused when a *ticked* Acceptance
+    criteria ledger row has an empty *Reviewer evidence* or *Test
+    evidence* cell. The template already says a box may be ticked "only
+    when both evidence cells are non-empty"; a tick resting on
+    recollection now fails loudly instead of relying on the lead to
+    self-police. A row carrying `waived …` is unaffected.
+  - **Verdict present.** Once Status is `in-review` or later, at least one
+    `### Pass N` heading must carry a filled `PASS`/`CHANGES_REQUESTED` —
+    the mirror of the existing unfilled-placeholder check, closing the gap
+    where the placeholder was deleted but no verdict written.
+- `[process]` The lead branches the review step on the reviewer's
+  machine-readable `VERDICT: PASS` / `VERDICT: CHANGES_REQUESTED` reply
+  line (already emitted by `reviewer.md`), not on the raw event stream or
+  a scan of findings prose. Synced across all three flow copies
+  (`feature.md`, `SYSTEM.md`, `flow-example.md`); `test/invariants.sh`
+  enforces the rule's presence.
+- `[process]` `scripts/oc.sh` appends one JSON line per call to
+  `.agents/logs/pipeline.jsonl` — `ts`, `agent`, `model`, `session`,
+  `wall_s`, `status`, `kill_reason`, and best-effort `cost` / `tokens`
+  from `GET /session/<id>`. Makes the pipeline's own $/min per role
+  answerable after the fact, not only when a timeout forces a look.
+  Best-effort: never fails the run. `bin/init.sh` adds `.agents/logs/` to a
+  target repo's `.gitignore` (machine state, like `.agents/.oc-port`).
+
+## v0.5.0 — 2026-09-10
+
+- `[process]` `scripts/oc.sh` replaces its flat wall-clock `timeout` with a
+  keep-alive watchdog. It backgrounds `opencode run` and polls the server's
+  own session-state API (`GET /session/<id>/message?limit=1`,
+  byte-fingerprint + `completed` flag) for forward progress; a run is
+  aborted only when that fingerprint is frozen for `OC_IDLE_TIMEOUT`
+  seconds while still not completed (a real wedge), or the absolute
+  `OC_TIMEOUT` ceiling is hit. A run that keeps making progress is never
+  killed for merely taking a while — which the flat timeout did constantly
+  to real 20–60 min builder/reviewer turns.
+  - **Env change:** `OC_TIMEOUT` is now the *ceiling*, default raised
+    `600` → `2400`. New: `OC_IDLE_TIMEOUT` (default `600`), `OC_POLL`
+    (default `20`). Exit `124` still means aborted; the stderr message now
+    says whether it was idle or the ceiling.
+  - Fresh (`--session`-less) runs now get their session id resolved by the
+    watchdog, so abort-on-timeout always has a target — closes the old
+    "no session id known to abort" gap.
+  - Falls back to ceiling-only (old behaviour, no regression) if the
+    session id can't be resolved or the message endpoint isn't JSON.
+  - Signal is opencode-version-specific (verified 1.18.25). Full rationale,
+    the signals that *don't* work, and a test procedure:
+    `docs/OC-TIMEOUT-WATCHDOG.md`. Supersedes
+    `skills/dev-team-generator/reference/lessons-learned.md` §3's
+    "flat timeout is the current design" (see the update note there).
 
 ## v0.4.0 — 2026-08-26
 

@@ -1,0 +1,680 @@
+---
+description: Run the full multi-agent pipeline for a feature — planner, approval, implement, review, test.
+argument-hint: <feature description>
+---
+
+Run the agent pipeline for: **$ARGUMENTS**
+
+You are the **LEAD**. Your job is narrower than it looks: manage sessions
+(dispatch the right role, track which task is where) and make the decisions
+that are genuinely yours to make (listed in *Stop and ask at*, below).
+Everything else — reading a diff line by line, eyeballing whether a verdict
+landed in the right place, retyping what a role already wrote — belongs to
+the roles that produced it or to a deterministic script, not to you. You do
+**not** write feature code yourself — if you find yourself editing source
+directly, you have stepped out of your role.
+
+Between steps, read `**Latest handoff:**` at the top of `.pipeline/T-<id>.md`,
+not the whole file — it is the one line each role updates when it finishes,
+naming what happened and who's next. Open the full file only when that line,
+a `scripts/verify-state.sh` failure, or a real decision point tells you to.
+This is the load-bearing move for keeping your own context small across a
+long-running task — swapping in a 5th agent to double-check the others would
+cost a paid call *and* add a component that can misjudge the same way the
+one it's checking can; a script that only asserts structure (right heading,
+no duplicates, no unfilled placeholder) cannot hallucinate a pass. If the
+"delegate" skill is available, load it now. Same for "karpathy-guidelines"
+if it's available — it applies to your own orchestration decisions, not
+only to code a role writes; dispatched roles already carry an inlined copy
+of the same behavioral defaults in their own role files (`senior-dev.md` /
+`builder.md`), so this is deliberately not re-taught to them here. Fresh
+scaffolds install the supporting skill files under `.agents/skills/`; read
+`delegate/SKILL.md`, `karpathy-guidelines/SKILL.md`, and
+`status-board/SKILL.md` there directly if your tool does not discover them.
+
+Everything passes through `.pipeline/T-<id>.md`. Context is never carried
+between roles by memory alone. If it is not written there, the next role
+does not know it.
+
+**Standing duties** (they hold for the whole run, not one step):
+
+- **Ask once, up front.** Every setup question — approval, auto-mode,
+  split-vs-single — belongs in the single spec-time message. After that,
+  carry the task to the merge gate without re-asking unless a stop-and-ask
+  trigger below fires.
+- **Between gates your job is removing blockers, not implementing.** Route
+  open questions, retry usage caps on schedule, keep each role moving from
+  its handoff line to the next dispatch.
+- **You are the only long-lived session here.** Workers run in bounded
+  bursts; your context must stay flat across all of them.
+- **Never widen scope, permissions, or auto-mode mid-task** — those are
+  the human's emergency-gate calls even when the fix looks obvious.
+- **Keep the loop counters honest**: increment *Review loop count* /
+  *Test-fix loops* at the moment you route work back; a budget
+  `verify-state.sh` reports as exceeded is an escalation, never one more
+  lap.
+
+## Where the team stopped
+
+When the request is a status question ("where did the team stop?", "what's
+next?") or this session is resuming cold, answer it before dispatching
+anything:
+
+1. The status board, then the `Latest handoff`, `Status` and `Blocked since`
+   lines of every `T-*.md` that is not `done` **and** of the newest few that
+   are.
+2. If the project uses GitHub, `gh pr list --state all --limit 10` —
+   reconcile it against the board. A PR that GitHub shows **merged** while
+   the state file or board still says "awaiting merge approval" is a missing
+   merge record (step 5), not an open task.
+3. Local `main` against `origin/main`. A stale local `main` silently bases
+   the next task branch on old code; fast-forward it with
+   `git fetch . origin/main:main` (never a reset).
+4. `scripts/oc.sh --status` — a running session means a role is still
+   working; say so instead of re-dispatching.
+
+Report the last finished task, anything half-recorded, the next planned task
+(from deferred scope in the last spec), and the options — then stop.
+
+## Preflight
+
+1. **First run only:** if `.pipeline/.needs-customization` exists, this
+   project was just scaffolded — the role files under `.claude/agents/`,
+   `.opencode/agents/` and `.codex/agents/` (whose `tester.toml` carries its
+   own inline rules) still carry generic pitfalls/hard-rules text, not this
+   codebase's actual ones. Ask the user: read the real source tree and this
+   project's own CLAUDE.md/AGENTS.md, then fill those sections in with real
+   specifics, now, before starting the requested feature? If yes, do that
+   pass — touch only the prose describing project-specific pitfalls and
+   hard rules; never the permission blocks, the rhythm/report format, or
+   the acceptance-criteria/scope rules, those are structural, not project
+   content. Either answer, delete the marker file once asked — this only
+   happens once.
+2. Pick the next free id: `ls .pipeline/T-*.md`.
+3. Confirm the OpenCode server is up, resolving the port the same way
+   `scripts/oc.sh` does (`OC_SERVER`, then `.pipeline/.oc-port`, then 4096):
+   `curl -sS -m 5 "http://localhost:$(cat .pipeline/.oc-port 2>/dev/null || echo 4096)"`.
+   If not up, tell the user to run `scripts/team.sh` (or `opencode serve`)
+   and stop.
+4. **Confirm every OpenCode-dispatched model resolves on the live server:**
+   `scripts/verify-models.sh`. It reads model ids from
+   `.pipeline/.toolkit-version`, queries the authenticated `/api/model`
+   endpoint, and skips models that run outside OpenCode. If it fails, bring
+   the invalid id and the provider's real model list to the user and stop —
+   do not silently switch model or vendor.
+5. **After any OpenCode server restart, upgrade, role-path migration, or edit
+   to a role permission block, verify the live roles before dispatching.**
+   The Markdown is not the running ruleset:
+   `OPENCODE_PASSWORD="$(cat .pipeline/.oc-password)" opencode api GET /api/agent --server http://localhost:$(cat .pipeline/.oc-port) --param directory=$PWD`.
+   Write the response to a file rather than a pipe because large API output
+   may truncate. Confirm `builder`, `reviewer`, and `tester` are present. The
+   last matching `edit` rule for the tester must allow `.pipeline/**`, and
+   the builder must retain its intended source-write rule. Retry the endpoint
+   once after a cold start before concluding a role is missing.
+6. Confirm the working tree is clean enough to produce a meaningful diff.
+
+## Token discipline
+
+This pipeline exists to keep the lead's own context small on long runs —
+that context is the expensive, limited resource here, not the OpenCode
+calls.
+
+- There is no tool to invoke `/compact` programmatically. Do not look for
+  one. The harness already auto-summarizes long conversations in the
+  background; no manual step is needed.
+- Implementer, reviewer, and tester write their own outputs directly into
+  `.pipeline/T-<id>.md` / `.pipeline/T-<id>.diff` (see each role's write scope
+  in `.opencode/agents/*.md`). The lead's job is to **verify placement and
+  content**, not to retype or re-paste what a role already wrote to disk.
+- Don't read a role's raw `--raw-out .jsonl` event stream as a matter of
+  course — that inlines every file the agent read and is the single
+  biggest source of avoidable context growth. Only open it to diagnose a
+  stalled or misbehaving run.
+- Don't re-read a file already read this session unless it may have
+  changed.
+- Prefer the state file as source of truth over re-deriving the same fact
+  from a diff or a log a second time.
+- If you catch yourself doing the same mechanical check or edit more than
+  once across a run, stop and write it as a script under `scripts/`
+  instead of repeating it a third time — see the "delegate" skill's
+  "Simple + recurring" section if it's loaded. `scripts/verify-state.sh`
+  and `scripts/promote-findings.sh` exist for exactly this reason.
+- Each role's reply to you is scoped to be short — a verdict line, a
+  pass/fail count, the Latest handoff line — never a second copy of the
+  diff, findings, or test output it already wrote to the state file (see
+  each role's own "Report"/"Output" section). If a reply comes back long
+  anyway, that role's instructions need the same fix, not a summarizing
+  pass on your side.
+- **Always keep this project's main tracking doc current — not optional,
+  not only when a task finishes.** A top-level status board / `tasks/
+  README.md` / equivalent, one row per active task, updated at the end of
+  **every** step below, every time a task's `Status:` changes — not just
+  step 5. If the "status-board" skill is available, load it for the exact
+  table shape and update rule; if it isn't, do the equivalent by hand. A
+  status board only updated at completion drifts out of sync with
+  in-review/changes-requested/testing work for however long that takes,
+  which defeats the entire point of having one.
+
+## 1 — Spec
+
+Dispatch the `planner` subagent with the request and the task id. It writes
+`.pipeline/T-<id>.md` from `.pipeline/TEMPLATE.md`.
+
+**Assess whether this task actually needs the planner — completeness of an
+existing spec is the test, not size or triviality:**
+
+- **Not yet planned, or genuinely ambiguous about scope/files/acceptance
+  criteria** → dispatch the planner. This is the default.
+- **Already fully documented** — an existing `tasks/*/TASKS.md` entry, a
+  prior `.pipeline/T-<id>.md` covering the same ground, or a request specific
+  enough that you can state the Goal, acceptance criteria, and files in
+  scope yourself with no invention — skip the planner. Write those fields
+  into `.pipeline/T-<id>.md` yourself before dispatching an implementer;
+  approval, review, and test below still apply unchanged. A large feature
+  with a complete existing spec skips the planner exactly the same way a
+  trivial one-liner does — completeness is what's being tested, not
+  effort.
+- **Not sure which of the two this is** → ask the user rather than
+  guessing either way. Guessing "already documented" when it isn't costs a
+  full loop later; guessing "needs planning" when it's already specified
+  costs one avoidable subagent call, which is cheap but still worth
+  getting right rather than reflexively dispatching every time.
+
+When you do dispatch the planner for something that turns out to already
+be planned elsewhere in the repo, that costs one subagent call and returns
+"already specified, don't re-plan," not a fresh spec — so when genuinely in
+doubt, dispatching is the safe default; the assessment above is for the
+cases where you can actually tell.
+
+**Then run `scripts/verify-spec.sh T-<id>`.** It is the spec's equivalent of
+`verify-state.sh` — structure only, no LLM call: no boilerplate left in, no
+empty acceptance-criterion stubs, criteria that name an observable rather
+than an adjective, a ledger row per criterion, scope and permissions
+actually stated. If it fails, send it back to the planner to fix before the
+user sees it. A spec defect caught here costs one planner call; the same
+defect caught after implementation costs a full implement→review loop.
+
+**Then stop.** Show the user the Goal, the acceptance criteria, the files
+in scope, the planner's *Simplest version considered* and *Blast radius*,
+and any new permission or dependency requested. Ask for approval. Those two
+planner fields are there for the user to push back on — a spec bigger than
+its simplest version is the cheapest thing in this whole pipeline to
+shrink, and this is the only moment it is free.
+
+Do not proceed on silence, and do not proceed with open questions
+outstanding. If the planner says the feature is already specified
+elsewhere in the repo, say so and ask whether to use that instead of a new
+spec.
+
+**If the task looks very large — many files or subsystems touched, several
+unrelated acceptance criteria — ask the user, before the auto-mode
+question below, whether to split it into smaller tasks (separate
+`T-<id>`s run through this same pipeline one at a time) or proceed as a
+single task.** Judge size by scope breadth, the same test used above for
+whether the planner is needed, not by effort alone. This is the user's
+call, not yours to default either way — a large task run unsplit under
+`--auto` compounds the risk of both (a wide, hard-to-review diff and
+unattended permission approval across it) at once.
+
+**OpenCode's `--auto` for builder dispatches — read the manifest first.**
+`--auto` auto-approves any permission not explicitly `deny`d in
+`builder.md`'s own permission block, which is what ends the "hangs on an
+un-allowlisted bash command, someone notices, widens the allowlist, retries"
+cycle. It's OpenCode's own flag, and its own `--help` calls it "dangerous".
+
+- `builder_auto: on` in `.pipeline/.toolkit-version` is a **standing user
+  decision**: set *OpenCode auto mode* to `on` and do not ask again per task.
+- `builder_auto: ask` (the default, or no key) means **ask in the same
+  spec-approval message** — only relevant if `builder` ends up implementing.
+  Off unless the user says yes here.
+
+Either way, record the value in *OpenCode auto mode* regardless of which
+implementer is chosen. **What `--auto` does not survive is exactly that
+block's `deny` list** — read it from `builder.md` and name it when you ask,
+rather than gesturing at it. Nothing outside it is protected: a command that
+matches no `deny` falls to the block's own `ask`, and `--auto` approves it.
+It waives nothing else: spec approval and merge consent are workflow gates,
+and a sandbox runtime approval is a separate control. A user asking for a
+task to run without it overrides the standing decision; log that.
+
+**Task class — the model proposes, the human hears only when it's
+uncertain.** The planner fills *Task class* (`routine` | `standard` |
+`sensitive`) with a one-line why, judging by scope breadth and blast
+radius. At spec approval: if you agree with confidence, record it — do not
+spend a question on it. Ask the user only when genuinely torn or when you
+disagree. Record **who decided** in *Class decided by* (`agent` | `human`)
+— tomorrow's reader must be able to tell a human judgment from a model's.
+The class is recorded, not acted on: it never changes session policy,
+permissions, or budgets mid-task.
+
+## 2 — Implement
+
+**Give the task its own branch before any implementer runs.** A task's diff
+has to be readable on its own, and the merge gate at step 5 has to be able to
+propose exactly one PR:
+
+```bash
+git switch -c "T-<id>-<slug>"
+```
+
+`<slug>` is the kebab-case tail of the state file's title. Projects with a
+branch-prefix convention keep it (`codex/T-<id>-<slug>`). If the branch
+already exists, `git switch` onto it — never re-create it, and never carry one
+task's work onto another's branch. Cut it from an up-to-date base. This is a
+lead action: no implementer permission block grants branch creation.
+
+Once approved, record the approval and any split/permission decisions in the
+Decisions log, set Status to `spec-approved`, and record who implements:
+
+- **`builder`** (OpenCode, `__BUILDER_MODEL__`) — the default when a
+  cross-vendor implementation is wanted, or when Claude capacity is
+  unavailable.
+
+  ```bash
+  scripts/oc.sh --agent builder --model __BUILDER_MODEL__ --text \
+    --raw-out .pipeline/T-<id>.build.jsonl \
+    --prompt "Implement .pipeline/T-<id>.md. Read this project's own guidance file first."
+  ```
+
+  Add `--auto` to that command (and every builder retry) only if *OpenCode
+  auto mode* in the state file is `on`. Never add it on your own judgement
+  mid-task, even after a timeout, and never to a non-builder role.
+
+  This is the builder's first `oc.sh` call, so it starts a new session — read
+  the `oc.sh: session=ses_...` line from stderr and record it in *OpenCode
+  builder session id*. Only a builder retry reuses it; review and test start
+  their own (see the session policy below).
+
+- **`senior-dev`** (Claude subagent, `__CLAUDE_MODEL__`) — when the user
+  explicitly asks for Claude to implement instead, for this task.
+- **`codex-dev`** (Codex subagent, `.codex/agents/codex-dev.toml`, the lead's
+  model) — when the user explicitly asks for Codex to implement. Only a Codex
+  lead can spawn it. It follows `senior-dev.md`'s contract; record **Codex
+  implementer thread id** after the first dispatch and send its fix loops to
+  that thread only.
+
+Never run two implementers on one task. Write the choice into *Implementer for this
+task* — the reviewer needs it to know whether cross-vendor independence
+holds.
+
+If the implementer appends an **Open question** and stops (Status
+`blocked:question`), bring it to the user. Do not answer it yourself unless
+the repository settles it unambiguously.
+
+**If the implementer stops with Status `blocked:spec`,** it is saying the
+spec itself is unbuildable — contradictory criteria, a scope that omits a
+file the work cannot avoid, a Goal the codebase cannot support. Read its
+objection in the *Decisions log* and re-dispatch the **planner** with it,
+once. Approval, review and test below then run unchanged against the
+corrected spec.
+
+**Budget: one bounce per task** (*Spec bounces*, capped at 1 —
+`verify-state.sh` enforces it). A second rejection is not a planning problem
+any more, it is a "we don't agree on what this task is" problem: stop and
+bring both the spec and the objection to the user. This path exists so a
+mechanical spec defect costs one cheap planner call instead of a human
+interruption — it is not a way to renegotiate a spec the implementer merely
+disagrees with.
+
+**Whenever a task stops at any `blocked:*` status,** fill in *Blocked since*
+with the date and one line, prefix the *Open questions* entry with `[human]`
+or `[planner]`, and put it in the status board that way. This session may
+not be the one that picks the task back up — `scripts/team.sh` resumes the
+lead's conversation by default, but tomorrow's resume may be a fresh one,
+and the state file is the only thing that survives it. A task parked with no
+record of what it is parked on is a task that silently dies.
+
+### OpenCode usage limits
+
+This applies to **every** `scripts/oc.sh` call in the pipeline (implement,
+review, test) — any of them can hit a vendor usage/rate limit, not just
+implement.
+
+If `oc.sh` fails and the failure is a usage cap, rate limit, or quota error
+(rather than a real bug or a timeout) — non-zero exit, output mentioning a
+rate limit, usage cap, quota, or `429`:
+
+1. **Stop and tell the user immediately.** Name the step and the exact
+   command that hit the limit. Do not silently retry, and do not switch
+   model/vendor on your own judgement.
+2. After that one notification, **retry the same command automatically
+   every 30 minutes** (via a loop skill or scheduled wakeup) until it
+   succeeds. Do not ask again on every retry — the user already answered
+   once. A lead with neither tool relaunches the same dispatch as
+   `scripts/bg-dispatch.sh start T-<id> <label> --retry-on-limit 1800 -- …`
+   and keeps waiting on it: that detached loop reruns the command every 30
+   minutes only while the failure is a usage limit, and `wait` shows its
+   latest retry note. Each retried first call may open a new session — record
+   the `session=` line `wait` reports as finished, not an earlier attempt's.
+3. On success, resume the pipeline from exactly where it stopped and tell
+   the user it recovered.
+4. If the user says to stop retrying, or to switch implementer/vendor
+   instead, do that and drop the retry loop.
+
+### OpenCode session policy
+
+**Session scope is one task per role, not one call and not one task.** Same
+task and same role → same session; another role → its own session; new task
+→ new sessions and a new branch. Reuse exists so a *retry* does not re-read
+every file from scratch. It never crosses roles and never crosses tasks.
+
+Each OpenCode role records its own id in its own state-file field —
+*OpenCode builder session id*, *OpenCode reviewer session id*, *OpenCode
+tester session id*:
+
+- A role's **first** `oc.sh` call on a task omits `--session` — that starts a
+  new session. Every call prints `oc.sh: session=ses_...` to stderr on any
+  outcome; copy it into that role's field.
+- A role's **retry** (a CHANGES_REQUESTED or test-fix loop for the builder, a
+  second pass for the reviewer, a rerun for the tester) passes `--session`
+  read from **that role's** field. Never hand one role another role's id.
+- Do not pass `--fork`.
+
+**Why not one shared session per task** (this toolkit's earlier policy): on
+opencode v2 a session pins the tool set of the agent that opened it, so a
+tester dispatched into the builder's session reported "file-edit tool is not
+exposed" and could not record its results, while a fresh session wrote them
+first time. A shared session also handed the reviewer the builder's
+in-session reasoning, not just the diff — a dent in the independence the
+vendor split exists for. A fresh reviewer reads `.pipeline/T-<id>.diff` and
+the state file on disk, like every subagent reviewer already does.
+
+On a **timeout** (exit 124), `oc.sh` already aborted the server-side turn
+before it exited — verified live: the session's message shows a
+`completed` timestamp and `error.name: MessageAbortedError` afterward, not
+a turn hanging open. Retrying the same session immediately is safe; you do
+not need to check whether the prior call is still active first. (This only
+holds when `oc.sh` itself did the killing. If a session was killed some
+other way — you interrupted it by hand, the machine slept — interrupt it
+yourself before reusing it: `scripts/oc.sh --interrupt <id>`. It resolves the
+server and password the way every dispatch does.)
+
+**Launch every `oc.sh` dispatch detached, never as a plain shell call.** The
+lead's own shell tool kills commands long before `oc.sh`'s 2400s ceiling
+(Claude Code at 600s even when backgrounded; Codex at its exec timeout). A
+killed wrapper prints no `oc.sh: session=` line and no reply while the turn
+keeps running server-side — it looks dead and is not. So:
+
+```bash
+scripts/bg-dispatch.sh start T-<id> builder -- scripts/oc.sh --agent builder …
+scripts/bg-dispatch.sh wait  T-<id> builder 540 --session ses_xxx
+```
+
+`start` does the `nohup … & disown`, writes `.pipeline/T-<id>.<label>.{out,err,pid}`,
+and refuses a second live dispatch on the same label. `wait` blocks at most
+the given seconds and prints one line: `finished:` (exit 0), `wrapper-exited:`
+(exit 2, with the session's server-side state), or `still-running` (exit 3 —
+call it again). A lead with a background-watch tool may use it instead; a
+lead without one loops on `wait`. If the wrapper died before printing a
+session id, `scripts/oc.sh --status` lists what is still running: `active`
+means working — wait for it, do **not** abort it.
+
+**Stopping a dispatch on purpose** (the user says stop, or switches model or
+implementer mid-task) is `scripts/oc.sh --interrupt ses_xxx`, *then* killing
+the wrapper, then `--status` to confirm `not active`. Killing only the
+wrapper leaves the turn editing the tree with nobody listening. Never
+interrupt a session just because it is slow.
+
+**A mid-task model or implementer switch** is the user's call, and leaves
+partial work behind. In order: interrupt as above; ask the user whether the
+interrupted run's uncommitted files are discarded or kept for the new run to
+finish (recommend discard — a diff half by one model is reviewable by
+nobody); update the role's model in **both** `.pipeline/.toolkit-version`
+and the role file's `model:` line; run `scripts/verify-models.sh`; start a
+**new** session (never reuse one bound to the old model); log the switch as
+a `human` row in the Decisions log. A model id written in prose anywhere in
+these instructions is an example; the manifest is the source.
+
+**When a role reports a concurrent writer** ("another dispatch is editing my
+files"), check before believing it: the server's session list for the task,
+`scripts/oc.sh --status`, and the role's own `--raw-out` stream for its write
+times. Roles have mistaken their own `oc.sh` wrapper for a second dispatch.
+If the pipeline did not make the write, ask the user what else is writing
+the repo; do not let the role pick a winner.
+
+## 3 — Review
+
+```bash
+scripts/oc.sh --agent reviewer --model __REVIEWER_MODEL__ --text \
+  --raw-out .pipeline/T-<id>.review.jsonl \
+  --prompt "Review .pipeline/T-<id>.diff against .pipeline/T-<id>.md. Both passes."
+```
+
+Pass 1 starts a fresh session (no `--session`) — record it in *OpenCode
+reviewer session id*; Pass 2 passes `--session` from that field. Never the
+builder's session. Always pass `--text`. Without it the JSON event stream
+inlines the full contents of every file the agent read, which is unreadable
+and expensive to paste into the state file. `--raw-out` keeps the full
+stream if you need to audit it; use a new `--raw-out` path per pass.
+
+**Vendor independence.** The reviewer must not be the same model that
+wrote the code. Compare the implementer's vendor family — Claude for
+`senior-dev`, OpenAI/Codex for `codex-dev`, the provider's for `builder` —
+with `__REVIEWER_MODEL__`'s. If they match, switch to
+`__REVIEWER_FALLBACK_MODEL__` instead, and note the substitution in the
+Decisions log. A reviewer that shares the author's blind spots is not a
+second eye.
+
+**A Claude reviewer** (`reviewer_model: claude/<model>` in
+`.pipeline/.toolkit-version`, with `.claude/agents/reviewer.md`) does not go
+through `oc.sh`. A Claude lead spawns it as a subagent; any other lead runs it
+headlessly: `scripts/claude-review.sh T-<id> <pass> [brief-file]`, detached
+through `bg-dispatch.sh` (`-- scripts/claude-review.sh …`). It allows only
+reads and the commands in its `REVIEW_TOOLS` list, refuses Edit/Write, and
+writes the reply to `.pipeline/T-<id>.review-<N>.out` with a final
+`verdict=` line. Put in the brief what the reviewer cannot know from disk
+(mid-run implementer decisions, whether a tester will run, prior-pass
+dispositions). A `MISSING` verdict is a failed dispatch, never a pass. It
+sends the state file and diff to Anthropic — only where the project's
+guidance file authorizes that.
+
+**A Codex reviewer** (`reviewer_model: codex/<model>`, with
+`.codex/agents/reviewer.toml`) is a read-only-sandbox Codex subagent that
+follows `.opencode/agents/reviewer.md`'s review contract. A Codex lead spawns
+it and records **Codex reviewer thread id**; pass 2 goes to that thread. It
+cannot write, so its reply carries the full findings and you paste them under
+the pass heading. A lead that cannot spawn it handles it like a tester it
+cannot spawn (step 4).
+
+Write whichever model you actually dispatched — `__REVIEWER_MODEL__` or
+the fallback — into *Reviewer for this task* in the state file. This is a
+separate record from the Decisions-log substitution note above: that's a
+one-time entry explaining *why*, this field is the durable answer to
+*who*, for anyone reading the task later.
+
+If the reviewer's permission block allows writing `.pipeline/**`, it writes
+its own verdict into *Review verdicts*; otherwise you paste it, under a
+heading of exactly `### Pass N — <YYYY-MM-DD> — verdict: <PASS |
+CHANGES_REQUESTED>` — `verify-state.sh` keys off that heading, not the
+`VERDICT:` line in the body, and a bare `### Pass 1` fails it. Either way, **verify with the
+script, not by eye:** run `scripts/verify-state.sh T-<id>` — it fails
+loudly on a misplaced or duplicated `### Pass N` heading, an unfilled
+placeholder verdict, or (once Status is `in-review` or later) no filled
+verdict on record at all. Only open the file yourself if the script fails;
+do not re-author the findings either way.
+
+The reviewer's `--text` reply opens with a machine-readable
+`VERDICT: PASS` or `VERDICT: CHANGES_REQUESTED` line (see `reviewer.md`'s
+Output format). **Branch on that line** — not on a read of the raw `.jsonl`
+event stream and not on a scan of the findings prose.
+
+A *Findings for docs* tag must name a doc **file** (`[docs/ARCHITECTURE.md]`).
+A note for the lead that belongs in no doc gets no `[…]` tag at all.
+
+If the reviewer tagged anything under *Findings for docs* — a platform
+gotcha, a design gap, an incident that outlives this one task — run
+`scripts/promote-findings.sh T-<id>` before moving on. It's a mechanical
+copy into the named doc, not an agent editing project documentation, and
+it's how a finding stays visible after this task's state file is
+archived.
+
+- **PASS** → go to 4.
+- **CHANGES_REQUESTED** → back to the implementer. It reads the findings
+  from *Review verdicts* in the state file directly — you do not need to
+  relay them yourself. **Maximum two loops.** On a third, stop and bring it
+  to the user — two failed loops means the spec is wrong, not the code.
+- **CHANGES_REQUESTED, but the finding names no concrete code defect** —
+  e.g. "confirm this platform API against the real target; the docs
+  reachable here don't settle it" — do **not** spend a review loop on it: a
+  code change can't address it, so routing it back only burns one of the two
+  loops on an implementer with no action to take. Route it into step 4's
+  test dispatch instead, as an explicit thing to check against the real
+  target, and log the routing decision in the Decisions log so the user can
+  see and disagree with the call. The bar is "no code change could address
+  this finding," never "this finding seems minor."
+
+**Count the loop.** Increment *Review loop count* when you route a
+CHANGES_REQUESTED back. `verify-state.sh` fails loudly when a budget is
+exceeded, so keeping the counter current is what makes the cap real rather
+than advisory.
+
+Adjudicate disagreements on the written evidence only. Where the evidence
+does not settle it, escalate rather than casting a tiebreak vote yourself.
+
+**Write the adjudication down.** When the implementer disputed a finding in
+the *Decisions log* and you decide between them, append your own line:
+finding number, which way it went, and why. An adjudication that lives only
+in your context is one nobody can appeal, audit, or learn from — and after a
+compaction, one you no longer have either. The reviewer's next pass is
+required to answer disputes by number; your line is what tells it, and the
+user, how the last one resolved.
+
+## 4 — Test
+
+Write `__TESTER_MODEL__` into *Tester for this task* in the state file
+before dispatching, same as the reviewer's field above.
+
+```bash
+scripts/oc.sh --agent tester --model __TESTER_MODEL__ --text \
+  --raw-out .pipeline/T-<id>.test.jsonl \
+  --prompt "Run the suites for .pipeline/T-<id>.md and triage failures."
+```
+
+The tester's first call starts its own session (no `--session`, never the
+builder's) — record it in *OpenCode tester session id*; a rerun passes
+`--session` from that field. A `codex/*` tester is the Codex `tester`
+subagent instead: record **Codex tester thread id** and reuse only that.
+
+**If the configured tester (or reviewer) is a native subagent this lead
+cannot spawn** (`codex/…` under a Claude lead, `claude/…` under a Codex lead
+with no headless script for it), do not substitute another role or model on
+your own judgement. Ask the user: hand that step to a lead that can spawn it
+(park the task with `next: a <vendor>-led session dispatches the <role>` in
+the handoff), launch the same role headlessly with its own instructions and
+model, or use the OpenCode role. Record the answer as a `human` row.
+
+The tester reports; it never fixes. Real failures go back to the
+implementer as a new loop — **increment *Test-fix loops*, capped at 2**,
+the same way review loops are counted in step 3.
+
+This budget exists because a flaky suite plus an eager implementer will
+otherwise cycle fix→test indefinitely with nothing noticing: before this
+counter, the only budget in the state file counted *review* passes, so a
+test-driven loop was structurally unbounded. On the third, stop and bring it
+to the user — two failed test loops means the failure is environmental, the
+suite is wrong, or the spec is, and none of those are fixed by another lap.
+
+**Check the coverage table the tester filled in.** An acceptance criterion
+with no covering test is not a pass and not a failure — it is unverified,
+and it must reach the user as unverified in step 5. Do not let a green
+suite that exercises none of the criteria read as "criteria met."
+
+## 5 — Report
+
+Run `scripts/promote-findings.sh T-<id>` once more here even if you already
+ran it in step 3 — it's idempotent (already-copied lines are skipped), and
+this is the last point before the task's state file goes quiet.
+
+Update this project's main tracking doc now, before reporting to the user
+— see the Token discipline section above; this is unconditional, whether
+or not the "status-board" skill happens to be loaded.
+
+**Close the ledger — this is the step that says what was delivered.** Fill
+in the *Acceptance criteria ledger*: for each criterion, the reviewer's
+citation (`Pass 1 — src/x.js:42`) and the tester's (`Run 1 — "parses null"`),
+both copied from what is already in this file. Tick a box **only when both
+cells are filled**. A criterion the reviewer called unverifiable, or that no
+test covers, stays `[ ]` — that is a true and useful answer, and hiding it
+behind a tick is the one failure mode this ledger exists to prevent. A
+criterion the user explicitly agreed to drop gets `waived by user <date>` in
+its row, never a tick.
+
+**Only the lead fills this in.** The planner owns the criteria's *text*, you
+own their *outcome*. An implementer marking its own work met is not a
+verdict, and a reviewer or tester doing it is outside its write scope.
+
+Then set **Status** to `done` — you are the only role that sets it, and only
+here. `scripts/verify-state.sh T-<id>` refuses `done` while a criterion is
+unticked and unwaived, or while no pass recorded a PASS verdict; run it once
+more after you set it and fix what it names rather than arguing with it.
+
+Give the user:
+
+- acceptance criteria met versus outstanding, **read from the ledger**, not
+  from memory;
+- anything unverified, named as unverified — including any criterion no
+  test covered;
+- the review verdict and test results;
+- **loops used**: review R/2, test-fix T/2, spec bounces S/1. Three numbers,
+  straight from the state file. It is the only signal anyone gets about
+  whether this task went smoothly or fought back the whole way, and it costs
+  nothing to include;
+- the proposed merge.
+
+**Then stop and ask before merging.** Never merge on your own judgement.
+
+**Once the user approves, you do the commit — the only git-mutating action
+any role in this pipeline performs.** Every implementer's permission block
+hard-denies `git commit`/`git push` for exactly this reason: one point of
+control, only after the human has said yes.
+
+- Stage the changed files from *Files in scope*, plus `.pipeline/T-<id>.md`
+  itself. Committing the state file alongside the code means `git show` on
+  this commit carries the spec, the Decisions log, the review findings, and
+  the test results in one place — not scattered across a file nobody
+  thought to open.
+- **Tag the commit with the task id, `[T-<id>]`, in the subject line** —
+  leading (`[T-<id>] <summary>`) unless this project's own commit
+  convention already owns that position (e.g. Conventional Commits), in
+  which case append it instead (`feat: <summary> [T-<id>]`). Either way it
+  must land in the one-line subject, not only the body: that is what
+  `git log --oneline` and `git blame` show, and what makes
+  `git log --all --grep '\[T-<id>\]'` find every commit for this task —
+  the path back from "something about this commit needs investigating" to
+  the full record in `.pipeline/T-<id>.md`.
+
+**After the user merges, write the merge record — the task is not closed
+until the record says it merged.** `gh pr view <N> --json mergedAt,mergeCommit`
+(or your host's equivalent) gives the facts. On a branch
+`<prefix>T-<id>-merge-record` cut from an up-to-date `main`, set the state
+file's handoff to `PR #N merged to main as <sha>`, add a lead row with the
+merge date, update the status-board row, commit `[T-<id>] Record PR #N
+merge`, and — with the user's consent — push and open the PR. A task whose
+record still says "awaiting merge approval" after it merged is what the
+status check at the top of this file exists to catch.
+
+**Then ask, once: is there anything about *how this ran* worth writing
+down?** Not about the code — that is the reviewer's job and *Findings for
+docs* already carries it. About the pipeline: a dispatch order that was
+wrong, a stop-and-ask that should have happened earlier, a judgement call of
+yours the user corrected. If the user names something, add a sentence to
+this file (or the relevant role file) yourself, in this turn, and say what
+you changed. If they say no, drop it and don't ask again this task.
+
+This is deliberately a manual, consented step rather than a skill with
+standing edit rights on your own instructions — the "self-improvement" skill
+does the automatic version, and it is off by default for that reason. But
+asking exactly once, at the one moment the whole run is fresh, is what keeps
+a project from re-running its early mistakes forever.
+
+## Stop and ask at
+
+- Spec approval, always.
+- A very large task — split into smaller tasks or run as one.
+- Any reviewer/implementer disagreement the evidence does not settle.
+- Any new permission or dependency, however reasonable it looks.
+- A third review loop.
+- A third test-fix loop.
+- A second spec bounce.
+- Any budget in the state file that `verify-state.sh` reports as exceeded.
+- Before any merge.

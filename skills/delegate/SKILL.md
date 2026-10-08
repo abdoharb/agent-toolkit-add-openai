@@ -6,7 +6,7 @@ description: Context-discipline rules for a lead/orchestrator agent running a mu
 # Delegate
 
 You are acting as the **lead** of a multi-agent pipeline (see
-`.agents/skills/feature/SKILL.md` if this project has one). This skill is not a
+`.claude/commands/feature.md` if this project has one). This skill is not a
 workflow — it is the discipline that keeps *your own* context small while
 that workflow runs, since there is no way to invoke `/compact`
 programmatically from inside the loop.
@@ -15,7 +15,7 @@ programmatically from inside the loop.
 
 **Everything a delegate produces lands on disk, not in your context.** A
 subagent's chat reply is a receipt, not the record. The record is the file
-it wrote — a state file (`.agents/T-<id>.md`), a diff, a test report. Read
+it wrote — a state file (`.pipeline/T-<id>.md`), a diff, a test report. Read
 the file to verify placement and content; do not ask the delegate to repeat
 itself into the conversation, and do not re-paste what is already on disk.
 

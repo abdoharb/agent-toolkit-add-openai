@@ -24,7 +24,7 @@ file — it's the one line each role updates when it finishes, naming what
 happened and who's next. Open the full file only when that line, a
 verification-script failure, or a real decision point tells you to.
 
-Everything passes through the state file (`.agents/T-<id>.md` or
+Everything passes through the state file (`.pipeline/T-<id>.md` or
 equivalent). Context is never carried between roles by memory alone — if
 it isn't written there, the next role doesn't know it.
 
@@ -42,7 +42,14 @@ exceeded budget as an escalation, never one more lap.
    server/runtime is actually reachable — fail fast with a clear message
    rather than letting a dispatch silently fall back to a slow cold-start
    path or hang.
-3. Confirm the working tree is clean enough to produce a meaningful diff.
+3. Resolve every configured worker model against the live runtime before the
+   first dispatch. Configuration files agreeing with each other does not prove
+   that a provider actually offers those model ids.
+4. After a runtime restart, upgrade, role-path migration, or permission edit,
+   inspect the live role/capability ruleset. Confirm every required role is
+   loaded and that last-match-wins permission ordering preserves the intended
+   write boundary; readable configuration alone is not enforcement evidence.
+5. Confirm the working tree is clean enough to produce a meaningful diff.
 
 ## Token/context discipline
 
@@ -140,17 +147,23 @@ bug, not a timeout): stop and tell the user immediately, naming the step
 and the command that hit it. Do not silently retry, and do not switch
 model/vendor on your own judgement. After that one notification, retry the
 same command automatically on an interval until it succeeds, or until the
-user says to stop or switch. On success, resume from exactly where it
+user says to stop or switch. A lead with no scheduler of its own does not
+skip this: it relaunches the dispatch under a detached retry loop that
+reruns the command only while the failure is a usage limit, and waits on
+that loop like any other dispatch. On success, resume from exactly where it
 stopped and say so.
 
 ### Dispatch-tool session policy
 
 If the dispatched tool supports continuing a session, scope a session to
-one task, not one call — **same task → same session, new task → new
-session, for all sub-agents alike**: implement, review, and test for the
-same task continue a single session instead of each starting cold. A fresh
-session per reviewer/tester would mean re-reading every file from scratch
-on every dispatch — that burns the context the reuse exists to save.
+one task **per role**, not one call — **same task and same role → same
+session, another role → its own session, new task → new sessions**. A
+builder retry continues the builder's session; the reviewer and tester each
+start fresh and reuse only their own on a later pass or rerun. One session
+shared by implement, review and test looked cheaper but broke in practice:
+a tool that pins a session's tool set to the agent that opened it left the
+tester unable to write its results, and the reviewer inherited the
+builder's reasoning instead of judging the diff.
 Record whatever session identifier the tool's dispatch prints, and pass it
 on subsequent calls for the same task.
 
@@ -172,8 +185,13 @@ and note the substitution in the state file's decisions log.
 The reviewer writes its own verdict into the state file (if its permission
 scope allows writing there; otherwise into its reply, for the lead to
 paste in). **Verify placement with a script, not by eye** — a structural
-check that fails loudly on a misplaced or duplicated heading or an
-unfilled placeholder, not a second LLM pass.
+check that fails loudly on a misplaced or duplicated heading, an unfilled
+placeholder, or a task that reached review with no filled verdict on
+record at all, not a second LLM pass.
+
+The reviewer's reply opens with a machine-readable verdict line
+(`VERDICT: PASS` / `VERDICT: CHANGES_REQUESTED`) — **branch on that line**,
+not on the findings prose or the raw event stream.
 
 If the reviewer flagged anything as true beyond this one task, run the
 findings-promotion script before moving on.
@@ -259,6 +277,18 @@ about whether the task fought back), and the proposed next action
 
 **Then stop and ask before merging.** Never merge on your own judgement.
 
+**Once the user approves, you do the commit** — the one git-mutating
+action anywhere in this pipeline; every implementer's write scope
+hard-denies `git commit`/`git push` precisely so it stays gated on that
+approval. Stage the state file alongside the code so the commit carries
+the spec, decisions, findings, and test results in one place, and **tag
+the commit with the task id** — `[T-<id>]` leading the subject line, or
+appended after it if the project's own commit convention already owns that
+position. It must sit in the one-line subject, not only the body, so
+`git log --oneline` / `git blame` surface it and `git log --grep` can find
+every commit for a task later, from whichever incident sends someone
+looking back at it.
+
 **Then ask once whether anything about *how the pipeline ran* is worth
 recording** — not about the code (that's the reviewer's job, and the
 findings-promotion path already carries it), but about orchestration: a
@@ -286,3 +316,7 @@ granting anything standing edit rights over its own instructions.
 - A third review loop, a third test-fix loop, or a second spec bounce.
 - Any budget the structural check reports as exceeded.
 - Before any merge.
+
+Record approvals in the Decisions log. On restart or compaction, recover
+status, counters, approvals, and worker activity from the task record before
+dispatching. Do not repeat recorded approvals or start a competing writer.

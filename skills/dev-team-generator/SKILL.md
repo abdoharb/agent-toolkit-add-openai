@@ -1,6 +1,6 @@
 ---
 name: dev-team-generator
-description: Interview the user, then generate a multi-agent pipeline (lead + planner/implementer/reviewer/tester, state-file handoff) for a project under whatever AI tools are available. Use when the user wants a multi-agent dev pipeline or cross-vendor review but the tools are not the fixed Codex + OpenCode pair, or when no existing template covers the target tool.
+description: Interview the user, then generate a multi-agent pipeline (lead + planner/implementer/reviewer/tester, state-file handoff) for a project, under whatever AI tool(s) are actually available — not limited to Claude Code + OpenCode. Use when the user wants a multi-agent dev pipeline, cross-vendor review, or "a team like agent-toolkit" but the tools involved aren't a fixed Claude+OpenCode pair, or when no existing template already covers the target tool.
 ---
 
 # Dev Team Generator
@@ -21,7 +21,7 @@ project, under any AI tool, and it works the same way.
 ships alongside this one in the `agent-toolkit` project this skill was
 originally distilled from, and might be installed next to this one
 elsewhere too): that one is the faster, more predictable path specifically
-when the target is Codex as lead + OpenCode as workers, since it
+when the target is Claude Code as lead + OpenCode as workers, since it
 fills in an existing template tree instead of generating fresh. Prefer it
 for exactly that pair. Reach for **this** skill instead whenever a role
 needs a tool that isn't that exact pair, the interview-and-adapt flow is
@@ -56,8 +56,8 @@ A small project may not need all four workers under separate tools — see
 Don't guess any of this. Ask the user (conversationally or via a structured
 question tool if one is available) before writing anything:
 
-1. **Project name**, and confirm it has a root guidance file (`AGENTS.md` or
-   equivalent). If it doesn't, say plainly that every
+1. **Project name**, and confirm it has a root guidance file (`CLAUDE.md` /
+   `AGENTS.md` / equivalent). If it doesn't, say plainly that every
    generated role reads that file for constraints and ask whether to write
    a minimal one first (see `reference/state-file-example.md`'s header for
    the kind of thing it needs to state) — don't generate the pipeline into
@@ -70,7 +70,7 @@ question tool if one is available) before writing anything:
    because a role is being skipped by default here).
 3. **Per role, which tool runs it.** Two shapes, and a role can be either:
    - **Inline** — the lead's own tool does the work directly (e.g. a
-     Codex custom subagent via its multi-agent mechanism). No dispatch
+     Claude Code subagent via the `Agent`/Task mechanism). No dispatch
      wrapper needed; weaker cross-vendor independence for review if the
      lead's tool is also the implementer's tool.
    - **Dispatched** — a separate CLI tool, invoked non-interactively with
@@ -80,7 +80,7 @@ question tool if one is available) before writing anything:
      see Step 3.
    For any tool that isn't already a worked example in this folder's
    `reference/role-examples.md` **and** isn't already scaffolded in this
-   target project (check `.codex/agents/`, `.opencode/agent/`, or
+   target project (check `.claude/agents/`, `.opencode/agents/`, or
    whatever that tool's own convention is), go to **Step 2** before
    promising it works.
 4. **Cross-vendor independence for review, specifically.** The reviewer
@@ -111,8 +111,8 @@ per-task basis, just applied here at setup time.
 ## Step 2 — Onboard any tool this folder doesn't already cover
 
 Read `reference/tool-onboarding.md` and follow it **before** writing a
-single role file for that tool. Do not adapt an OpenCode- or Codex-shaped
-file by guessing at the new tool's config format,
+single role file for that tool. Do not adapt an OpenCode-shaped or
+Claude-Code-shaped file by guessing at the new tool's config format,
 permission model, or dispatch mechanism — research it live first. A tool
 that turns out to only support an interactive UI, or only a global
 (not per-repo) custom-agent config, is a real constraint to say out loud,
@@ -127,8 +127,8 @@ ones make:
    the state-file contract, the pipeline sequence, the loop cap, and the
    stop-and-ask list for this specific project. Adapt
    `reference/flow-example.md` to whatever mechanism the lead's own tool
-   supports for a repeatable instruction set (a repository skill if it's
-   Codex; otherwise whatever that tool's own equivalent is — ask
+   supports for a repeatable instruction set (a slash command if it's
+   Claude Code; otherwise whatever that tool's own equivalent is — ask
    rather than assume one exists). This file is the one every worker role
    implicitly serves; writing it first is what makes "starting from the
    leader" true in practice, not just in the write order.
@@ -185,7 +185,7 @@ overwriting.
 4. If this run is happening inside the `agent-toolkit` checkout itself,
    mention that the generated project can also use the `delegate` and
    `karpathy-guidelines` skills from `../..`'s `skills/` directory if it's
-   running under Codex — this skill's own `reference/` material
+   running under Claude Code — this skill's own `reference/` material
    already carries the load-bearing parts of that discipline inline (see
    `reference/lessons-learned.md`), so it isn't a hard dependency, just a
    convenience if that specific toolkit is already at hand.
@@ -196,7 +196,7 @@ Everything under `reference/` is written to travel with this skill folder
 on its own — copy `dev-team-generator/` somewhere else and it still has what it
 needs. That's a deliberate duplication against `agent-toolkit`'s own
 `docs/` and `templates/` (which this skill was distilled from): those stay
-the source of truth for the Codex+OpenCode fast path (`toolkit-init`),
+the source of truth for the Claude+OpenCode fast path (`toolkit-init`),
 this folder is the source of truth for the generate-anything path.
 
 - `reference/lessons-learned.md` — hardening rules earned the hard way

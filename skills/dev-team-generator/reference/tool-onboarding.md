@@ -12,15 +12,15 @@ needed, not maintaining an ever-growing library of pre-built adapters.
    Find, from the tool's own documentation or by experimenting with it
    directly:
    - Where it looks for custom agent/rule definitions — a per-repo
-     directory convention (like `.codex/agents/` or `.opencode/agent/`),
+     directory convention (like `.claude/agents/` or `.opencode/agents/`),
      a global (per-machine) config location, or no custom-agent concept
      at all.
    - What frontmatter or config keys it actually reads: model selection, a
      permission/capability model, a system-prompt field, temperature or
      similar generation controls.
    - **How — or whether — it can be dispatched non-interactively from a
-     script.** OpenCode has `opencode run --attach`; a Codex custom
-     subagent is dispatched via the lead session's multi-agent mechanism,
+     script.** OpenCode has `opencode run --attach`; a Claude Code
+     subagent is dispatched via that session's own Agent/Task mechanism,
      not a separate CLI at all. A given tool might only support an
      interactive UI, in which case it **cannot** be a scripted pipeline
      participant — say that plainly instead of forcing the fit. This is
@@ -50,7 +50,7 @@ needed, not maintaining an ever-growing library of pre-built adapters.
 
 3. **Write the frontmatter/config for real, in the tool's own required
    shape.** Don't invent a plausible-looking schema by analogy to
-   OpenCode's or Codex's. If you can't find documentation for the
+   OpenCode's or Claude Code's. If you can't find documentation for the
    exact shape, generate a minimal test file and confirm the tool actually
    reads and applies it (a made-up permission key that's silently ignored
    is worse than no permission block at all, since it looks like a

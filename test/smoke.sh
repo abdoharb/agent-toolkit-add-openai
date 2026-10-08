@@ -1,12 +1,15 @@
 #!/usr/bin/env bash
 #
-# Automated version of the manual smoke run documented in AGENTS.md's
+# Automated version of the manual smoke run documented in CLAUDE.md's
 # "Commands" section. Asserts the scaffolder's core guarantees end to end:
 #
 #   1. first scaffold writes every file, with no unsubstituted placeholder
 #   2. the first-run customization marker is dropped exactly once
-#   3. a second run skips everything (never clobbers) and does NOT re-drop
-#      the marker once deleted
+#   3. a flag-free second run loads its stamp, skips everything (never
+#      clobbers), and does NOT re-drop the marker once deleted
+#   3a. a flag-free plain run installs files added by a newer toolkit
+#   3a. Codex lead instructions, skills, and planner are scaffolded; team.sh
+#       falls back to Codex when Claude is unavailable
 #   4. --update against an unchanged target reports every file up to date
 #      and writes nothing
 #   5. --update against a drifted file reports exactly that one diff
@@ -14,7 +17,8 @@
 #   7. verify-state.sh: valid state file passes; 'blocked' Status is known;
 #      a third review pass (loop-cap breach) fails loudly; a blown budget
 #      counter fails; 'done' is refused while an acceptance criterion is
-#      unticked and unwaived
+#      unticked and unwaived, or while a ticked ledger row cites no
+#      evidence; a task past review with no filled verdict fails
 #   8. verify-spec.sh: the raw template fails (it is boilerplate), a filled
 #      spec passes, and an unmeasurable acceptance criterion is caught
 #   9. promote-findings.sh: copies findings into docs, is idempotent, and
@@ -35,7 +39,7 @@ fail() { printf 'smoke: FAIL: %s\n' "$1" >&2; exit 1; }
 
 INIT_ARGS=(--target "$TMP" --project-name smoke
   --builder-model a/b --reviewer-model a/c
-  --tester-model a/b)
+  --reviewer-fallback-model d/e --tester-model a/b)
 
 # --- 1. first scaffold -----------------------------------------------------
 bash "$ROOT/bin/init.sh" "${INIT_ARGS[@]}" > "$TMP/run1.log" 2>&1 \
@@ -45,64 +49,279 @@ leftovers="$(grep -rl '__[A-Z_]*__' "$TMP" || true)"
 [ -z "$leftovers" ] || fail "unsubstituted placeholders remain in: $leftovers"
 ok "no unsubstituted __PLACEHOLDER__ tokens"
 
-python3 - "$TMP" <<'PY' || fail "generated Codex agent TOML is invalid"
-from pathlib import Path
-import sys
-import tomllib
-
-root = Path(sys.argv[1])
-agents = sorted((root / ".codex" / "agents").glob("*.toml"))
-assert len(agents) == 3, agents
-for path in agents:
-    data = tomllib.loads(path.read_text())
-    for key in ("name", "description", "model", "developer_instructions"):
-        assert data.get(key), (path, key)
-assert tomllib.loads((root / ".codex/agents/planner.toml").read_text())["model"] == "gpt-5.6-sol"
-assert tomllib.loads((root / ".codex/agents/senior-dev.toml").read_text())["model"] == "gpt-5.6-terra"
-config = tomllib.loads((root / ".codex/config.toml").read_text())
-assert config["model"] == "gpt-5.6-sol"
-assert config["agents"]["enabled"] is True
-PY
-ok "Codex custom-agent TOML parses with Sol/Terra defaults"
-
 wrote="$(grep -c '^init.sh: wrote ' "$TMP/run1.log" || true)"
 # Exclude this log and the customization marker; the provenance stamp is
 # counted separately since it is written once, not rendered per-template.
-stamp_written=0; [ -f "$TMP/.agents/.toolkit-version" ] && stamp_written=1
+stamp_written=0; [ -f "$TMP/.pipeline/.toolkit-version" ] && stamp_written=1
 files="$(find "$TMP" -type f -not -name run1.log \
   -not -name .needs-customization -not -name .toolkit-version | wc -l | tr -d ' ')"
 [ "$wrote" = "$((files + stamp_written))" ] || fail "claimed $wrote writes but $((files + stamp_written)) files exist"
 ok "every reported write produced exactly one file ($files rendered + stamp)"
 
-[ -f "$TMP/.agents/.needs-customization" ] || fail ".needs-customization marker missing on fresh scaffold"
+grep -q '^builder_auto:  ask$' "$TMP/.pipeline/.toolkit-version" || fail "stamp lacks the default builder_auto: ask"
+for field in 'OpenCode builder session id' 'OpenCode reviewer session id' 'OpenCode tester session id' \
+  'Codex tester thread id' 'Codex implementer thread id' 'Codex reviewer thread id'; do
+  grep -q "^\*\*$field:\*\*" "$TMP/.pipeline/TEMPLATE.md" || fail "state template lacks the per-role field: $field"
+done
+! grep -q '^\*\*OpenCode session id:\*\*' "$TMP/.pipeline/TEMPLATE.md" || fail "state template still has the shared OpenCode session id field"
+AU="$(mktemp -d "${TMPDIR:-/tmp}/toolkit-auto.XXXXXX")"
+bash "$ROOT/bin/init.sh" --target "$AU" --project-name smoke --builder-auto on > "$AU/run.log" 2>&1 \
+  || fail "init.sh --builder-auto on failed"
+grep -q '^builder_auto:  on$' "$AU/.pipeline/.toolkit-version" || fail "--builder-auto on was not stamped"
+if bash "$ROOT/bin/init.sh" --target "$(mktemp -d "${TMPDIR:-/tmp}/toolkit-auto-bad.XXXXXX")" \
+  --project-name smoke --builder-auto yes > /dev/null 2>&1; then
+  fail "init.sh accepted an invalid --builder-auto value"
+fi
+ok "builder_auto is stamped (ask by default, on when given) and the state template has one session field per role"
+
+[ -x "$TMP/scripts/dashboard" ] || fail "project dashboard missing or not executable"
+cmp -s "$ROOT/integrations/herdr/dashboard.py" "$TMP/scripts/dashboard" \
+  || fail "project dashboard differs from the shared standalone source"
+ok "self-contained executable dashboard was scaffolded"
+
+for codex_file in \
+  "$TMP/AGENTS.md" \
+  "$TMP/.codex/agents/planner.toml" \
+  "$TMP/.codex/agents/codex-dev.toml" \
+  "$TMP/.codex/rules/pipeline.rules" \
+  "$TMP/.agents/skills/feature/SKILL.md" \
+  "$TMP/.agents/skills/toolkit-update/SKILL.md"; do
+  [ -f "$codex_file" ] || fail "Codex scaffold file missing: $codex_file"
+done
+for opencode_file in \
+  "$TMP/.opencode/agents/builder.md" \
+  "$TMP/.opencode/agents/reviewer.md" \
+  "$TMP/.opencode/agents/tester.md"; do
+  [ -f "$opencode_file" ] || fail "OpenCode V2 role file missing: $opencode_file"
+done
+[ ! -d "$TMP/.opencode/agent" ] || fail "fresh scaffold wrote the legacy singular OpenCode role directory"
+[ -x "$TMP/scripts/verify-models.sh" ] || fail "verify-models.sh missing or not executable"
+ok "OpenCode V2 roles and live model verifier were scaffolded"
+
+MODEL_BIN="$TMP/modelbin"
+mkdir "$MODEL_BIN"
+cat > "$MODEL_BIN/opencode" <<'EOF'
+#!/bin/sh
+count=0
+[ ! -f "$MODEL_COUNT_FILE" ] || count="$(cat "$MODEL_COUNT_FILE")"
+count=$((count + 1))
+printf '%s\n' "$count" > "$MODEL_COUNT_FILE"
+if [ "$count" = 1 ]; then
+  printf '%s\n' '{"data":[]}'
+else
+  printf '%s\n' '{"data":[{"providerID":"a","modelID":"b"},{"providerID":"a","modelID":"c"},{"providerID":"d","modelID":"e"}]}'
+fi
+EOF
+chmod +x "$MODEL_BIN/opencode"
+(
+  cd "$TMP"
+  MODEL_COUNT_FILE="$TMP/model-count" OC_MODEL_RETRY_DELAY=0 \
+    PATH="$MODEL_BIN:/usr/bin:/bin" scripts/verify-models.sh > "$TMP/model-check.log" 2>&1
+) || fail "verify-models.sh did not recover from a cold provider list"
+grep -q 'OK (4 oc.sh model id(s) resolve' "$TMP/model-check.log" \
+  || fail "verify-models.sh did not report the resolved configured models"
+! grep -q 'not on this server' "$TMP/model-check.log" \
+  || fail "verify-models.sh leaked a transient cold-start error before succeeding"
+[ "$(cat "$TMP/model-count")" = 2 ] || fail "verify-models.sh did not retry the cold provider list exactly once"
+ok "verify-models retries cold providers without printing false failure diagnostics"
+
+grep -q '\.claude/commands/feature.md' "$TMP/.agents/skills/feature/SKILL.md" \
+  || fail "Codex feature skill does not point at the canonical lead flow"
+grep -q 'Not populated by agent-toolkit' "$TMP/AGENTS.md" \
+  || fail "generated AGENTS.md masks its missing project-specific guidance"
+# shellcheck disable=SC2016 # literal backticks/quotes are intentional
+grep -q 'Codex `planner` subagent' "$TMP/.agents/skills/feature/SKILL.md" \
+  || fail "Codex feature skill does not select the Codex planner"
+grep -q 'sandbox_mode = "workspace-write"' "$TMP/.codex/agents/planner.toml" \
+  || fail "Codex planner lacks the sandbox needed to write its state file"
+grep -q 'never modify source' "$TMP/.codex/agents/planner.toml" \
+  || fail "Codex planner does not state its source-write boundary"
+ok "Codex lead instructions, skills, and planner were scaffolded"
+
+[ ! -e "$TMP/.codex/agents/tester.toml" ] || fail "an OpenCode tester_model still scaffolded a Codex tester agent"
+CT="$(mktemp -d "${TMPDIR:-/tmp}/toolkit-codex-tester.XXXXXX")"
+bash "$ROOT/bin/init.sh" --target "$CT" --project-name smoke \
+  --builder-model a/b --reviewer-model a/c --reviewer-fallback-model d/e \
+  --tester-model codex/some-model > "$CT/run.log" 2>&1 || fail "init.sh with a codex/* tester failed"
+grep -q '^model = "some-model"$' "$CT/.codex/agents/tester.toml" \
+  || fail "codex/* tester_model did not render .codex/agents/tester.toml with its model id"
+grep -q '^name = "tester"$' "$CT/.codex/agents/tester.toml" || fail "Codex tester agent has no tester name"
+grep -q 'never fix anything' "$CT/.codex/agents/tester.toml" || fail "Codex tester does not state its report-only boundary"
+grep -q '"codex"' "$CT/scripts/verify-models.sh" || fail "verify-models.sh does not skip codex/* roles"
+ok "a codex/* tester_model scaffolds a Codex tester agent and is skipped by verify-models"
+
+[ ! -e "$TMP/.codex/agents/reviewer.toml" ] || fail "an OpenCode reviewer_model still scaffolded a Codex reviewer agent"
+grep -q '\.claude/agents/senior-dev\.md' "$TMP/.codex/agents/codex-dev.toml" \
+  || fail "Codex implementer does not follow the canonical senior-dev contract"
+CR="$(mktemp -d "${TMPDIR:-/tmp}/toolkit-codex-reviewer.XXXXXX")"
+bash "$ROOT/bin/init.sh" --target "$CR" --project-name smoke \
+  --builder-model a/b --reviewer-model codex/review-model --reviewer-fallback-model d/e \
+  --tester-model a/b > "$CR/run.log" 2>&1 || fail "init.sh with a codex/* reviewer failed"
+grep -q '^model = "review-model"$' "$CR/.codex/agents/reviewer.toml" \
+  || fail "codex/* reviewer_model did not render .codex/agents/reviewer.toml with its model id"
+grep -q '^sandbox_mode = "read-only"$' "$CR/.codex/agents/reviewer.toml" || fail "Codex reviewer is not read-only"
+bash "$ROOT/bin/init.sh" --update --target "$CR" > "$CR/update.log" 2>&1 \
+  || fail "codex/* reviewer did not round-trip through --update triage"
+ok "Codex implementer is always scaffolded; a codex/* reviewer_model gets a read-only Codex reviewer"
+
+for oc_file in agents/leader.md agents/planner.md commands/feature.md commands/toolkit-update.md; do
+  [ -f "$TMP/.opencode/$oc_file" ] || fail "OpenCode lead file missing: $oc_file"
+done
+grep -q '\.claude/agents/planner.md' "$TMP/.opencode/agents/planner.md" \
+  || fail "OpenCode planner does not reference its canonical contract"
+grep -q '\.claude/commands/feature.md' "$TMP/.opencode/agents/leader.md" \
+  || fail "OpenCode leader does not reference the canonical flow"
+grep -q '^permissions:' "$TMP/.opencode/agents/planner.md" \
+  || fail "OpenCode planner does not use native V2 permissions"
+grep -q 'resource: ".pipeline/T-\*.md"' "$TMP/.opencode/agents/planner.md" \
+  || fail "OpenCode planner lacks its state-file-only edit rule"
+for oc_command in feature toolkit-update; do
+  grep -q '^agent: leader$' "$TMP/.opencode/commands/$oc_command.md" \
+    || fail "OpenCode $oc_command command does not select the leader"
+  grep -q '^subagent: false$' "$TMP/.opencode/commands/$oc_command.md" \
+    || fail "OpenCode $oc_command command does not preserve the lead session"
+done
+ok "OpenCode agents and commands reference canonical prompts with native V2 metadata"
+
+[ -f "$TMP/.pipeline/.needs-customization" ] || fail ".needs-customization marker missing on fresh scaffold"
 ok "first-run customization marker dropped"
 
-STAMP="$TMP/.agents/.toolkit-version"
+STAMP="$TMP/.pipeline/.toolkit-version"
 [ -f "$STAMP" ] || fail "provenance stamp missing on fresh scaffold"
 grep -q '^toolkit_sha:' "$STAMP" || fail "stamp lacks toolkit_sha"
 grep -q '^builder_model: a/b' "$STAMP" || fail "stamp does not record the init flags"
-grep -q '^codex_sol_model: gpt-5.6-sol' "$STAMP" || fail "stamp lacks the Codex Sol default"
-grep -q '^codex_terra_model: gpt-5.6-terra' "$STAMP" || fail "stamp lacks the Codex Terra default"
 cp "$STAMP" "$TMP/stamp.bak"
 ok "fresh scaffold wrote the provenance stamp with flags + toolkit SHA"
 
 # --- 2. second run skips, never clobbers ------------------------------------
-cp "$TMP/.agents/skills/feature/SKILL.md" "$TMP/feature.sentinel"
-printf 'LOCAL CUSTOMIZATION\n' >> "$TMP/.agents/skills/feature/SKILL.md"
-rm -f "$TMP/.agents/.needs-customization"
-bash "$ROOT/bin/init.sh" "${INIT_ARGS[@]}" > "$TMP/run2.log" 2>&1 \
+cp "$TMP/.claude/commands/feature.md" "$TMP/feature.sentinel"
+printf 'LOCAL CUSTOMIZATION\n' >> "$TMP/.claude/commands/feature.md"
+cp "$TMP/.opencode/agents/leader.md" "$TMP/leader.sentinel"
+printf 'LOCAL OPENCODE CUSTOMIZATION\n' >> "$TMP/.opencode/agents/leader.md"
+rm -f "$TMP/.pipeline/.needs-customization"
+bash "$ROOT/bin/init.sh" --target "$TMP" > "$TMP/run2.log" 2>&1 \
   || fail "second init.sh run failed"
 skips="$(grep -c '^init.sh: skip (exists)' "$TMP/run2.log" || true)"
 [ "$skips" = "$files" ] || fail "second run: $skips skips, expected $files"
 ! grep -q '^init.sh: wrote ' "$TMP/run2.log" || fail "second run wrote something"
-grep -q 'LOCAL CUSTOMIZATION' "$TMP/.agents/skills/feature/SKILL.md" \
+grep -q 'LOCAL CUSTOMIZATION' "$TMP/.claude/commands/feature.md" \
   || fail "second run clobbered a customized file"
-[ ! -f "$TMP/.agents/.needs-customization" ] || fail "marker recreated on non-fresh run"
-cmp -s "$TMP/stamp.bak" "$TMP/.agents/.toolkit-version" 2>/dev/null \
+grep -q 'LOCAL OPENCODE CUSTOMIZATION' "$TMP/.opencode/agents/leader.md" \
+  || fail "second run clobbered the OpenCode leader"
+[ ! -f "$TMP/.pipeline/.needs-customization" ] || fail "marker recreated on non-fresh run"
+cmp -s "$TMP/stamp.bak" "$TMP/.pipeline/.toolkit-version" 2>/dev/null \
   || fail "second run touched the provenance stamp"
 ok "re-run skipped all $files files, preserved local edits, marker + stamp untouched"
 # restore the pristine render so the --update checks below start clean
-mv "$TMP/feature.sentinel" "$TMP/.agents/skills/feature/SKILL.md"
+mv "$TMP/feature.sentinel" "$TMP/.claude/commands/feature.md"
+mv "$TMP/leader.sentinel" "$TMP/.opencode/agents/leader.md"
+
+# Simulate a stamped project that predates Codex support. A plain, flag-free
+# run must recover the render values from the stamp and add only missing files.
+rm -f "$TMP/AGENTS.md" \
+  "$TMP/.codex/agents/planner.toml" \
+  "$TMP/.agents/skills/feature/SKILL.md" \
+  "$TMP/.agents/skills/toolkit-update/SKILL.md"
+bash "$ROOT/bin/init.sh" --target "$TMP" > "$TMP/bootstrap.log" 2>&1 \
+  || fail "flag-free missing-file bootstrap failed"
+bootstrap_writes="$(grep -c '^init.sh: wrote ' "$TMP/bootstrap.log" || true)"
+[ "$bootstrap_writes" = "4" ] \
+  || fail "missing-file bootstrap wrote $bootstrap_writes files, expected 4"
+grep -q '^builder_model: a/b' "$TMP/.pipeline/.toolkit-version" \
+  || fail "missing-file bootstrap changed the provenance values"
+[ ! -f "$TMP/.pipeline/.needs-customization" ] \
+  || fail "missing-file bootstrap recreated the first-run marker"
+ok "flag-free plain run installs newly added files from stamped values only"
+
+# Simulate a stamped scaffold without OpenCode lead support. Triage reports
+# all four files without writing them; plain bootstrap adds only those files.
+rm -f "$TMP/.opencode/agents/leader.md" "$TMP/.opencode/agents/planner.md" \
+  "$TMP/.opencode/commands/feature.md" "$TMP/.opencode/commands/toolkit-update.md"
+rc=0
+bash "$ROOT/bin/init.sh" --update --target "$TMP" > "$TMP/oc-triage.log" 2>&1 || rc=$?
+[ "$rc" = "1" ] || fail "OpenCode missing-file triage did not report drift"
+[ "$(grep -c '^  new ' "$TMP/oc-triage.log")" = "4" ] \
+  || fail "OpenCode triage did not list exactly four new files"
+[ ! -f "$TMP/.opencode/agents/leader.md" ] || fail "OpenCode triage wrote an adapter"
+bash "$ROOT/bin/init.sh" --target "$TMP" > "$TMP/oc-bootstrap.log" 2>&1 \
+  || fail "OpenCode flag-free bootstrap failed"
+[ "$(grep -c '^init.sh: wrote ' "$TMP/oc-bootstrap.log")" = "4" ] \
+  || fail "OpenCode bootstrap did not write exactly four files"
+cmp -s "$TMP/stamp.bak" "$STAMP" || fail "OpenCode bootstrap changed the stamp"
+[ ! -f "$TMP/.pipeline/.needs-customization" ] || fail "OpenCode bootstrap recreated the marker"
+ok "OpenCode lead bootstrap is additive; triage writes nothing and preserves provenance"
+
+# Exercise lead auto-selection without requiring tmux/Codex on the test host.
+# PATH contains a fake codex and tmux but no claude, and tmux records the pane
+# command instead of creating a real session.
+FAKEBIN="$TMP/fakebin"
+mkdir -p "$FAKEBIN"
+cat > "$FAKEBIN/codex" <<'EOF'
+#!/bin/sh
+exit 0
+EOF
+cat > "$FAKEBIN/tmux" <<'EOF'
+#!/bin/sh
+printf '%s\n' "$*" >> "$TEAM_LOG"
+[ "$1" = "has-session" ] && [ "${TEAM_HAS_SESSION:-0}" = "1" ] && exit 0
+[ "$1" = "has-session" ] && exit 1
+exit 0
+EOF
+chmod +x "$FAKEBIN/codex" "$FAKEBIN/tmux"
+TEAM_LOG="$TMP/team.log" PATH="$FAKEBIN:/usr/bin:/bin" \
+  "$TMP/scripts/team.sh" --fresh codex-smoke >/dev/null 2>&1 \
+  || fail "team.sh failed its Codex fallback launch"
+grep -q 'send-keys .* scripts/codex-lead.sh codex-smoke --fresh C-m' "$TMP/team.log" \
+  || fail "team.sh did not put Codex in the lead pane when Claude was unavailable"
+ok "team.sh falls back to Codex when Claude is unavailable"
+
+cat > "$FAKEBIN/opencode" <<'EOF'
+#!/bin/sh
+exit 0
+EOF
+chmod +x "$FAKEBIN/opencode"
+TEAM_LOG="$TMP/team-oc.log" PATH="$FAKEBIN:/usr/bin:/bin" \
+  "$TMP/scripts/team.sh" --lead opencode --port 4097 --fresh oc-smoke >/dev/null 2>&1 \
+  || fail "team.sh failed its explicit OpenCode launch"
+grep -q 'send-keys .*team.0 .*opencode --server http://localhost:4097 C-m' "$TMP/team-oc.log" \
+  || fail "OpenCode lead did not connect to the selected server"
+grep -q 'team.0 .*OPENCODE_PASSWORD=.*cat' "$TMP/team-oc.log" \
+  || fail "OpenCode lead did not load server authentication at runtime"
+! grep -q -- '--auto\|--continue\|--agent' "$TMP/team-oc.log" \
+  || fail "OpenCode lead launch auto-approved, resumed an arbitrary worker, or used unsupported --agent"
+ok "team.sh launches an authenticated OpenCode-only lead on the selected port"
+
+rm -f "$FAKEBIN/codex"
+TEAM_LOG="$TMP/team-oc-auto.log" PATH="$FAKEBIN:/usr/bin:/bin" \
+  "$TMP/scripts/team.sh" --fresh oc-auto >/dev/null 2>&1 \
+  || fail "team.sh failed OpenCode auto fallback"
+grep -q 'team.0 .*opencode --server' "$TMP/team-oc-auto.log" \
+  || fail "team.sh did not select OpenCode when Claude/Codex were absent"
+ok "team.sh falls back to OpenCode without Claude or Codex"
+
+TEAM_LOG="$TMP/team-oc-resume.log" TEAM_OPENCODE_SESSION=ses_AbC123 \
+  PATH="$FAKEBIN:/usr/bin:/bin" "$TMP/scripts/team.sh" --lead opencode oc-resume \
+  >/dev/null 2>&1 || fail "team.sh failed explicit OpenCode lead resume"
+grep -q -- '--session ses_AbC123 C-m' "$TMP/team-oc-resume.log" \
+  || fail "team.sh did not preserve the exact mixed-case lead session id"
+TEAM_LOG="$TMP/team-oc-fresh.log" TEAM_OPENCODE_SESSION=ses_AbC123 \
+  PATH="$FAKEBIN:/usr/bin:/bin" "$TMP/scripts/team.sh" --lead opencode --fresh oc-fresh \
+  >/dev/null 2>&1 || fail "team.sh failed fresh OpenCode lead launch"
+! grep -q -- '--session' "$TMP/team-oc-fresh.log" || fail "--fresh reused the lead session"
+if TEAM_LOG="$TMP/team-oc-invalid.log" TEAM_OPENCODE_SESSION='ses_abc;bad' \
+  PATH="$FAKEBIN:/usr/bin:/bin" "$TMP/scripts/team.sh" --lead opencode oc-invalid \
+  >/dev/null 2>&1; then
+  fail "team.sh accepted shell text in TEAM_OPENCODE_SESSION"
+fi
+! grep -q '^new-session ' "$TMP/team-oc-invalid.log" || fail "invalid session created panes"
+ok "OpenCode resume uses only an explicit lead id; --fresh and input validation are enforced"
+
+TEAM_LOG="$TMP/team-existing.log" TEAM_HAS_SESSION=1 TEAM_LEAD=invalid \
+  PATH="$FAKEBIN:/usr/bin:/bin" "$TMP/scripts/team.sh" existing \
+  >/dev/null 2>&1 || fail "team.sh refused to attach an existing session before lead selection"
+grep -q '^attach -t existing$' "$TMP/team-existing.log" \
+  || fail "team.sh did not attach the existing session"
+ok "team.sh attaches an existing session without requiring a lead CLI"
 
 # --- 3. provenance stamp ------------------------------------------------------
 
@@ -114,7 +333,7 @@ grep -q "all $files checked files match" "$TMP/upd1.log" || fail "--update summa
 ok "--update: flag-free run defaults from the stamp; clean target exits 0"
 
 # --- 5. --update: drift is summarized, exit 1, hunks only behind --diff -------
-printf '\n' >> "$TMP/.agents/TEMPLATE.md"
+printf '\n' >> "$TMP/.pipeline/TEMPLATE.md"
 rc=0
 bash "$ROOT/bin/init.sh" --update --target "$TMP" > "$TMP/upd2.log" 2>&1 || rc=$?
 [ "$rc" = "1" ] || fail "--update exited $rc on a drifted target, expected 1"
@@ -155,14 +374,14 @@ ok "--update without a stamp recovers the init values from the target's files"
 # --- 5. self-target guard ---------------------------------------------------
 if bash "$ROOT/bin/init.sh" --target "$ROOT" --project-name x \
      --builder-model a/b --reviewer-model a/c \
-     --tester-model a/b >/dev/null 2>&1; then
+     --reviewer-fallback-model d/e --tester-model a/b >/dev/null 2>&1; then
   fail "init.sh allowed scaffolding into its own checkout"
 fi
 ok "init.sh refuses --target pointing at the toolkit itself"
 
 # --- 6. verify-state.sh ------------------------------------------------------
 VS="$TMP/scripts/verify-state.sh"
-cat > "$TMP/.agents/T-01.md" <<'EOF'
+cat > "$TMP/.pipeline/T-01.md" <<'EOF'
 **Status:** blocked
 
 ## Review verdicts
@@ -175,17 +394,17 @@ EOF
 ok "verify-state accepts valid state file incl. blocked Status"
 
 # 6a. Task class + decision source: absent = fine, junk = fails
-cat > "$TMP/.agents/T-01.md" <<'EOF'
+cat > "$TMP/.pipeline/T-01.md" <<'EOF'
 **Status:** blocked
 **Task class:** TBD
 **Class decided by:** maybe
 EOF
 "$VS" T-01 > /dev/null 2>&1 && fail "verify-state accepted bogus Task class / decision source"
-printf '**Status:** blocked\n**Task class:** sensitive\n**Class decided by:** human\n' > "$TMP/.agents/T-01.md"
+printf '**Status:** blocked\n**Task class:** sensitive\n**Class decided by:** human\n' > "$TMP/.pipeline/T-01.md"
 "$VS" T-01 > /dev/null 2>&1 || fail "verify-state rejected a valid class + decision source"
 ok "verify-state validates Task class + Class decided by (absent ok, junk fails)"
 
-printf '\n### Pass 3 — 2026-08-26 — verdict: PASS\n\nnone\n' >> "$TMP/.agents/T-01.md"
+printf '\n### Pass 3 — 2026-08-26 — verdict: PASS\n\nnone\n' >> "$TMP/.pipeline/T-01.md"
 if "$VS" T-01 > /dev/null 2>&1; then
   fail "verify-state accepted a Pass 3 (two-loop cap breached)"
 fi
@@ -196,7 +415,7 @@ ok "verify-state fails loudly on a third review pass"
 # anti-thrash and delivery-contract rules; if they are advisory only, they
 # are not rules. Each is checked on a file that is otherwise valid, so a
 # failure here names exactly one cause.
-cat > "$TMP/.agents/T-03.md" <<'EOF'
+cat > "$TMP/.pipeline/T-03.md" <<'EOF'
 **Status:** in-review
 **Review loop count:** 1 / 2
 **Test-fix loops:** 5 / 2
@@ -209,11 +428,11 @@ cat > "$TMP/.agents/T-03.md" <<'EOF'
 1. [high] a.js:1 — finding
 EOF
 "$VS" T-03 2>&1 | grep -q 'test-fix loop budget exceeded'   || fail "verify-state did not catch a blown test-fix budget"
-sed -i.bak 's|^\*\*Test-fix loops:\*\* 5 / 2|**Test-fix loops:** 1 / 2|' "$TMP/.agents/T-03.md"
+sed -i.bak 's|^\*\*Test-fix loops:\*\* 5 / 2|**Test-fix loops:** 1 / 2|' "$TMP/.pipeline/T-03.md"
 "$VS" T-03 > /dev/null 2>&1 || fail "verify-state rejected a file with in-budget counters"
 ok "verify-state enforces the loop budgets and passes when they are in range"
 
-cat > "$TMP/.agents/T-04.md" <<'EOF'
+cat > "$TMP/.pipeline/T-04.md" <<'EOF'
 **Status:** done
 **Review loop count:** 1 / 2
 **Test-fix loops:** 0 / 2
@@ -241,7 +460,7 @@ if "$VS" T-04 > /dev/null 2>&1; then
   fail "verify-state accepted 'done' with an unticked, unwaived criterion"
 fi
 "$VS" T-04 2>&1 | grep -q "acceptance criteria are unticked"   || fail "verify-state's done-gate failed for the wrong reason"
-python3 - "$TMP/.agents/T-04.md" <<'PY'
+python3 - "$TMP/.pipeline/T-04.md" <<'PY'
 import sys
 p=sys.argv[1]; s=open(p).read()
 s=s.replace('| AC2 | [ ] | Pass 1 — unverifiable from diff | no covering test |',
@@ -251,17 +470,71 @@ PY
 "$VS" T-04 > /dev/null 2>&1 || fail "verify-state rejected 'done' with a properly waived criterion"
 ok "verify-state refuses 'done' on an open criterion, accepts an explicit waiver"
 
+# 6c. done-gate also rejects a ticked ledger row with an empty evidence cell —
+# a tick TEMPLATE.md already forbids, now enforced instead of self-policed.
+cat > "$TMP/.pipeline/T-06.md" <<'EOF'
+**Status:** done
+**Review loop count:** 1 / 2
+**Test-fix loops:** 0 / 2
+**Spec bounces:** 0 / 1
+
+## Acceptance criteria
+
+- [ ] AC1 — something checkable
+
+### Acceptance criteria ledger
+
+| AC | Met? | Reviewer evidence | Test evidence |
+| --- | --- | --- | --- |
+| AC1 | [x] | Pass 1 — a.js:42 | |
+
+## Review verdicts
+
+### Pass 1 — 2026-09-10 — verdict: PASS
+
+none
+EOF
+"$VS" T-06 > /dev/null 2>&1 && fail "verify-state accepted 'done' with a ticked ledger row citing no test evidence"
+"$VS" T-06 2>&1 | grep -q 'cite no evidence' || fail "done-gate ledger-evidence check failed for the wrong reason"
+python3 - "$TMP/.pipeline/T-06.md" <<'PY'
+import sys
+p = sys.argv[1]; s = open(p).read()
+s = s.replace('| AC1 | [x] | Pass 1 — a.js:42 | |',
+              '| AC1 | [x] | Pass 1 — a.js:42 | Run 1 — "parses null" |')
+open(p, 'w').write(s)
+PY
+"$VS" T-06 > /dev/null 2>&1 || fail "verify-state rejected a 'done' file whose ticked row cites both kinds of evidence"
+ok "verify-state's done-gate rejects a ticked ledger row with a blank evidence cell"
+
+# 6d. once review has run, a missing/placeholder verdict fails from the file
+# side too — the mirror of the unfilled-placeholder check.
+cat > "$TMP/.pipeline/T-07.md" <<'EOF'
+**Status:** testing
+**Review loop count:** 1 / 2
+**Test-fix loops:** 0 / 2
+**Spec bounces:** 0 / 1
+
+## Review verdicts
+
+### Pass 1 — 2026-09-10 — verdict: TBD
+EOF
+"$VS" T-07 > /dev/null 2>&1 && fail "verify-state accepted Status 'testing' with no filled review verdict"
+"$VS" T-07 2>&1 | grep -q 'no Review verdicts pass records a filled' || fail "missing-verdict check failed for the wrong reason"
+sed -i.bak 's/verdict: TBD/verdict: PASS/' "$TMP/.pipeline/T-07.md"
+"$VS" T-07 > /dev/null 2>&1 || fail "verify-state rejected 'testing' once a filled PASS verdict was present"
+ok "verify-state requires a filled review verdict once a task has reached review"
+
 # --- 7. verify-spec.sh -------------------------------------------------------
 # The spec-side equivalent: structure only, run before the human sees a spec.
 VSPEC="$TMP/scripts/verify-spec.sh"
-cp "$TMP/.agents/TEMPLATE.md" "$TMP/.agents/T-05.md"
+cp "$TMP/.pipeline/TEMPLATE.md" "$TMP/.pipeline/T-05.md"
 if "$VSPEC" T-05 > /dev/null 2>&1; then
   fail "verify-spec passed the raw template, which is entirely boilerplate"
 fi
 "$VSPEC" T-05 2>&1 | grep -q 'still the template placeholder'   || fail "verify-spec did not identify template boilerplate"
 ok "verify-spec rejects an unfilled spec"
 
-python3 - "$TMP/.agents/T-05.md" <<'PY'
+python3 - "$TMP/.pipeline/T-05.md" <<'PY'
 import sys
 NL = chr(10)
 p = sys.argv[1]
@@ -297,7 +570,7 @@ PY
 "$VSPEC" T-05 > /dev/null 2>&1 || { "$VSPEC" T-05; fail "verify-spec rejected a properly filled spec"; }
 ok "verify-spec accepts a filled spec"
 
-python3 - "$TMP/.agents/T-05.md" <<'PY'
+python3 - "$TMP/.pipeline/T-05.md" <<'PY'
 import sys
 p=sys.argv[1]; s=open(p).read()
 s=s.replace('resolves identically to "https://x.test/a"','works well')
@@ -311,7 +584,7 @@ ok "verify-spec catches an unmeasurable acceptance criterion"
 # --- 8. promote-findings.sh --------------------------------------------------
 PF="$TMP/scripts/promote-findings.sh"
 mkdir -p "$TMP/docs"
-cat > "$TMP/.agents/T-02.md" <<'EOF'
+cat > "$TMP/.pipeline/T-02.md" <<'EOF'
 ## Findings for docs
 
 - [docs/GOTCHAS.md] real finding worth keeping
@@ -323,10 +596,102 @@ grep -q 'appended to docs/GOTCHAS.md' <<< "$out" || fail "legit finding not prom
 grep -q 'escaping the repo root' <<< "$out" || fail "../.. path was not refused"
 grep -q 'unsafe/invalid doc path' <<< "$out" || fail "absolute path was not refused"
 [ -f "$TMP/docs/GOTCHAS.md" ] || fail "docs/GOTCHAS.md not created"
-[ ! -e "$TMP/../escaped.md" ] && [ ! -f "/tmp/escaped.md" ] || fail "a traversal write landed somewhere"
+[ ! -e "$TMP/../escaped.md" ] || fail "a traversal write landed somewhere"
+[ ! -f "/tmp/escaped.md" ] || fail "a traversal write landed somewhere"
 [ ! -f "$(cd "$TMP/.." && pwd)/escaped.md" ] || fail "traversal escaped above target"
 out="$("$PF" T-02 2>&1)"
 grep -q 'already present, skipped' <<< "$out" || fail "promotion not idempotent"
 ok "promote-findings copies legit findings, refuses escaping paths, is idempotent"
+
+cat > "$TMP/.pipeline/T-03.md" <<'MD'
+## Findings for docs
+
+- [.pipeline/] a lead note mis-tagged with a directory
+- [docs/GOTCHAS.md] finding after the directory tag
+MD
+out="$("$PF" T-03 2>&1)" || fail "promote-findings aborted on a directory tag: $out"
+grep -q 'skip tag naming a directory' <<< "$out" || fail "directory tag was not skipped"
+grep -q 'finding after the directory tag' "$TMP/docs/GOTCHAS.md" || fail "finding after a directory tag was dropped"
+ok "promote-findings skips a directory tag and still promotes later findings"
+
+# --- 9. bg-dispatch.sh -------------------------------------------------------
+# A stub oc.sh in a scratch copy: the real one needs a live server.
+BG="$(mktemp -d "${TMPDIR:-/tmp}/toolkit-bg.XXXXXX")"
+mkdir -p "$BG/scripts" "$BG/.pipeline"
+cp "$TMP/scripts/bg-dispatch.sh" "$BG/scripts/"
+cat > "$BG/scripts/oc.sh" <<'STUB'
+#!/usr/bin/env bash
+if [ "$1" = --status ]; then echo "$2: not active"; exit 0; fi
+echo "oc.sh: agent=x session=new" >&2
+case "$*" in *die*) exit 1 ;; esac
+sleep "${SLEEP:-2}"; echo reply; echo "oc.sh: session=ses_stub" >&2
+STUB
+chmod +x "$BG/scripts/oc.sh"
+(
+  cd "$BG"
+  scripts/bg-dispatch.sh start T-1 builder -- scripts/oc.sh x >/dev/null
+  if scripts/bg-dispatch.sh start T-1 builder -- scripts/oc.sh x >/dev/null 2>&1; then
+    fail "bg-dispatch started a second live dispatch on one label"
+  fi
+  out="$(scripts/bg-dispatch.sh wait T-1 builder 20)" || fail "wait did not report finished: $out"
+  grep -q '^finished: oc.sh: session=ses_stub' <<< "$out" || fail "wait printed the wrong completion: $out"
+  SLEEP=6 scripts/bg-dispatch.sh start T-2 builder -- scripts/oc.sh x >/dev/null
+  rc=0; out="$(scripts/bg-dispatch.sh wait T-2 builder 1)" || rc=$?
+  { [ "$rc" -eq 3 ] && grep -q '^still-running' <<< "$out"; } || fail "wait did not time out as still-running (rc=$rc): $out"
+  scripts/bg-dispatch.sh start T-3 tester -- scripts/oc.sh die >/dev/null
+  sleep 1
+  rc=0; out="$(scripts/bg-dispatch.sh wait T-3 tester 5 --session ses_x)" || rc=$?
+  { [ "$rc" -eq 2 ] && grep -q 'ses_x: not active' <<< "$out"; } || fail "wait did not report a dead wrapper (rc=$rc): $out"
+  if scripts/bg-dispatch.sh start T-4 x -- bash -c true >/dev/null 2>&1; then
+    fail "bg-dispatch ran a command that is not a dispatch wrapper"
+  fi
+  scripts/bg-dispatch.sh wait T-2 builder 20 >/dev/null || fail "T-2 stub never finished"
+)
+ok "bg-dispatch refuses duplicate labels and non-wrappers; wait reports finished, still-running, wrapper-exited"
+
+# --retry-on-limit: two 429 attempts, then success; other failures never retry.
+cat > "$BG/scripts/oc.sh" <<'STUB'
+#!/usr/bin/env bash
+n=$(( $(cat .pipeline/tries 2>/dev/null || echo 0) + 1 )); echo "$n" > .pipeline/tries
+echo "oc.sh: session=ses_try$n" >&2
+case "$*" in *timeout*) exit 124 ;; esac
+[ "$n" -ge 3 ] || { echo "Error: 429 Too Many Requests" >&2; exit 1; }
+echo reply
+STUB
+(
+  cd "$BG"
+  if scripts/bg-dispatch.sh start T-7 builder --retry-on-limit 5 -- scripts/oc.sh x >/dev/null 2>&1; then
+    fail "bg-dispatch accepted a retry interval under its 60s floor"
+  fi
+  export BG_RETRY_MIN=1
+  rm -f .pipeline/tries
+  scripts/bg-dispatch.sh start T-8 builder --retry-on-limit 1 -- scripts/oc.sh x >/dev/null
+  out="$(scripts/bg-dispatch.sh wait T-8 builder 30)" || fail "retry loop did not finish: $out"
+  grep -q '^finished: oc.sh: session=ses_try3$' <<< "$out" || fail "wait did not report the final attempt: $out"
+  [ "$(grep -c '^bg-dispatch.sh: usage limit' .pipeline/T-8.builder.err)" = 2 ] || fail "limited attempts were not recorded"
+  grep -q '^\[attempt 1\] oc.sh: session=ses_try1$' .pipeline/T-8.builder.err || fail "a limited attempt kept a bare completion line"
+  grep -qx reply .pipeline/T-8.builder.out || fail "final attempt's reply was not kept"
+  rm -f .pipeline/tries
+  scripts/bg-dispatch.sh start T-9 builder --retry-on-limit 1 -- scripts/oc.sh timeout >/dev/null
+  scripts/bg-dispatch.sh wait T-9 builder 30 >/dev/null || true
+  [ "$(cat .pipeline/tries)" = 1 ] || fail "a timeout (exit 124) was retried as a usage limit"
+)
+ok "bg-dispatch --retry-on-limit reruns only usage-limit failures and reports the final attempt"
+
+# --- 10. oc.sh --interrupt / claude-review.sh argument guards ----------------
+if out="$("$TMP/scripts/oc.sh" --interrupt 2>&1)"; then fail "oc.sh --interrupt with no id succeeded"; fi
+grep -q 'needs at least one session id' <<< "$out" || fail "oc.sh --interrupt gave no usage error: $out"
+printf 'reviewer_model: opencode/some-model\n' > "$BG/.pipeline/.toolkit-version"
+cp "$TMP/scripts/claude-review.sh" "$BG/scripts/"
+mkdir -p "$BG/.claude/agents"; : > "$BG/.claude/agents/reviewer.md"
+: > "$BG/.pipeline/T-5.md"; : > "$BG/.pipeline/T-5.diff"
+FAKECLAUDE="$(mktemp -d "${TMPDIR:-/tmp}/toolkit-claude.XXXXXX")"
+printf '#!/usr/bin/env bash\necho "claude stub must not run" >&2; exit 9\n' > "$FAKECLAUDE/claude"
+chmod +x "$FAKECLAUDE/claude"
+if out="$(cd "$BG" && PATH="$FAKECLAUDE:$PATH" scripts/claude-review.sh T-5 1 2>&1)"; then
+  fail "claude-review ran for a non-claude reviewer_model"
+fi
+grep -q 'not claude/\*' <<< "$out" || fail "claude-review did not refuse a non-claude reviewer_model: $out"
+ok "oc.sh --interrupt and claude-review.sh refuse bad input without dispatching"
 
 printf '\nsmoke: all checks passed (%s)\n' "$PASSED"

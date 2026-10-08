@@ -1,0 +1,92 @@
+#!/usr/bin/env bash
+# Run from the lead's CURRENT sandbox before feature work. An outside-shell
+# pass is not proof that the lead or a planner has the same capabilities.
+set -eu
+REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+cd "$REPO_ROOT"
+die() { printf 'codex-preflight.sh: %s\n' "$*" >&2; exit 1; }
+for dependency in codex opencode python3; do
+  command -v "$dependency" >/dev/null 2>&1 || die "$dependency not installed"
+done
+VERSION="$(codex --version)"
+printf 'codex-preflight.sh: %s (toolkit baseline: 0.160.0)\n' "$VERSION"
+CODEX_NUMBER="$(printf '%s' "$VERSION" | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)"
+if [ -n "$CODEX_NUMBER" ] && [ "$(printf '0.160.0\n%s\n' "$CODEX_NUMBER" | sort -V | head -1)" != "0.160.0" ]; then
+  printf 'codex-preflight.sh: warning: Codex %s is older than the tested baseline 0.160.0; hooks/--no-daemon behavior may differ\n' "$CODEX_NUMBER" >&2
+fi
+FEATURES="$(codex features list)" || die "cannot inspect Codex runtime capabilities"
+for feature in hooks multi_agent; do
+  printf '%s\n' "$FEATURES" | grep -qE "^${feature}[[:space:]].*[[:space:]]true$" \
+    || die "Codex $feature capability is unavailable or disabled; review your runtime configuration before starting"
+done
+codex resume --help | grep -q -- '--no-daemon' \
+  || die "installed Codex lacks the launcher environment isolation option --no-daemon; update Codex before starting"
+for path in .codex/agents/planner.toml .codex/hooks.json scripts/codex-session.py \
+  .agents/skills/feature/SKILL.md .agents/skills/delegate/SKILL.md \
+  .agents/skills/status-board/SKILL.md .agents/skills/karpathy-guidelines/SKILL.md \
+  .pipeline/TEMPLATE.md scripts/bg-dispatch.sh; do
+  [ -f "$path" ] || die "missing $path; finish scaffold/update before starting"
+done
+# A codex/* tester is a native Codex subagent the lead must be able to spawn.
+if grep -qE '^tester_model: *codex/' .pipeline/.toolkit-version 2>/dev/null; then
+  [ -f .codex/agents/tester.toml ] || die "tester_model is codex/* but .codex/agents/tester.toml is missing"
+  grep -q '^name = "tester"' .codex/agents/tester.toml || die "tester definition has no tester name"
+fi
+# A codex/* reviewer is a native read-only Codex subagent the lead spawns.
+if grep -qE '^reviewer_model: *codex/' .pipeline/.toolkit-version 2>/dev/null; then
+  [ -f .codex/agents/reviewer.toml ] || die "reviewer_model is codex/* but .codex/agents/reviewer.toml is missing"
+  grep -q '^sandbox_mode = "read-only"' .codex/agents/reviewer.toml || die "Codex reviewer is not read-only"
+fi
+# The project rules let the dispatch wrappers run outside the sandbox without
+# a prompt per call. Missing is allowed (approval then happens per command).
+[ -f .codex/rules/pipeline.rules ] \
+  || printf 'codex-preflight.sh: note: .codex/rules/pipeline.rules is missing; every scripts/oc.sh call will need its own runtime approval\n' >&2
+# A claude/* reviewer is dispatched through scripts/claude-review.sh, which
+# needs the Claude CLI and the reviewer agent; check now, not at step 3.
+if grep -qE '^reviewer_model: *claude/' .pipeline/.toolkit-version 2>/dev/null; then
+  command -v claude >/dev/null 2>&1 || die "reviewer_model is claude/* but the claude CLI is not installed"
+  for path in scripts/claude-review.sh .claude/agents/reviewer.md; do
+    [ -f "$path" ] || die "reviewer_model is claude/* but $path is missing"
+  done
+fi
+grep -q '^name = "planner"' .codex/agents/planner.toml || die "planner definition has no planner name"
+if [ -f .agents/TEMPLATE.md ] || compgen -G ".agents/T-*.md" >/dev/null; then
+  die "legacy .agents runtime state remains; complete the pipeline-directory migration first"
+fi
+PROBE="$(mktemp .pipeline/.write-probe.XXXXXX)" || die "cannot write .pipeline; request approval for this path"
+rm -f "$PROBE"
+if [ -n "${OC_SERVER:-}" ]; then
+  SERVER="$OC_SERVER"
+elif [ -f .pipeline/.oc-port ]; then
+  SERVER="http://localhost:$(cat .pipeline/.oc-port)"
+else
+  SERVER="http://localhost:4096"
+fi
+if [ -n "${OC_PASSWORD:-}" ]; then
+  OPENCODE_PASSWORD="$OC_PASSWORD"
+elif [ -f .pipeline/.oc-password ]; then
+  OPENCODE_PASSWORD="$(cat .pipeline/.oc-password)"
+else
+  OPENCODE_PASSWORD="${OPENCODE_PASSWORD:-}"
+fi
+export OPENCODE_PASSWORD
+if command -v timeout >/dev/null 2>&1; then
+  TIMEOUT=timeout
+elif command -v gtimeout >/dev/null 2>&1; then
+  TIMEOUT=gtimeout
+else
+  die "timeout/gtimeout not installed; install coreutils for the OpenCode wrapper"
+fi
+if ! "$TIMEOUT" 10 opencode api GET /api/session --server "$SERVER" --param limit=1 >/dev/null 2>&1; then
+  if [ -f .codex/rules/pipeline.rules ]; then
+    # Every check above passed. The OpenCode CLI cannot reach its server from
+    # inside the sandbox; the project rules run scripts/oc.sh outside it, so
+    # that is the probe that matters for dispatch. Exit 3 = run it next.
+    printf 'codex-preflight.sh: OpenCode API unavailable at %s from this sandbox (server, authentication, or sandbox network policy).\n' "$SERVER" >&2
+    printf 'codex-preflight.sh: all other checks passed; run scripts/oc.sh --status next — .codex/rules/pipeline.rules runs it outside the sandbox, and exit 0 there proves server and credential.\n' >&2
+    exit 3
+  fi
+  die "OpenCode API unavailable at $SERVER (server, authentication, or sandbox network policy); authorize this exact operation if policy blocks it"
+fi
+printf 'codex-preflight.sh: state writes and authenticated OpenCode access passed; verify planner discovery in Codex before dispatch.\n'
+printf 'codex-preflight.sh: git writes and protected config updates may require runtime approval; spec/merge consent remains a separate gate.\n'

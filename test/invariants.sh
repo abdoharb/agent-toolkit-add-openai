@@ -6,7 +6,7 @@
 # This toolkit deliberately keeps several hand-synced surfaces — the lead's
 # flow exists three times (the generated slash command, SYSTEM.md for an
 # any-tool lead, and the generator skill's flow example), the state-file
-# contract twice, and the role prose once per tool. AGENTS.md's Conventions
+# contract twice, and the role prose once per tool. CLAUDE.md's Conventions
 # say to re-diff them by hand after any pipeline change. That instruction is
 # correct and it does not work: it depends on the author remembering a
 # five-bullet rule at exactly the moment they are focused on something else.
@@ -28,18 +28,31 @@ set -eu
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 
-FEATURE="templates/codex/skills/feature/SKILL.md.tmpl"
+FEATURE="templates/claude/commands/feature.md.tmpl"
 SYSTEM="SYSTEM.md"
 FLOW="skills/dev-team-generator/reference/flow-example.md"
 STATE="templates/agents-state/TEMPLATE.md.tmpl"
 STATE_EX="skills/dev-team-generator/reference/state-file-example.md"
-PLANNER="templates/codex/agents/planner.toml.tmpl"
-SENIOR="templates/codex/agents/senior-dev.toml.tmpl"
-CODEX_REVIEWER="templates/codex/agents/reviewer-fallback.toml.tmpl"
-BUILDER="templates/opencode/agent/builder.md.tmpl"
-REVIEWER="templates/opencode/agent/reviewer.md.tmpl"
-TESTER="templates/opencode/agent/tester.md.tmpl"
+PLANNER="templates/claude/agents/planner.md.tmpl"
+SENIOR="templates/claude/agents/senior-dev.md.tmpl"
+BUILDER="templates/opencode/agents/builder.md.tmpl"
+REVIEWER="templates/opencode/agents/reviewer.md.tmpl"
+TESTER="templates/opencode/agents/tester.md.tmpl"
 LESSONS="skills/dev-team-generator/reference/lessons-learned.md"
+CODEX_AGENTS="templates/codex/AGENTS.md.tmpl"
+CODEX_FEATURE="templates/codex/skills/feature/SKILL.md.tmpl"
+CODEX_PLANNER="templates/codex/agents/planner.toml.tmpl"
+CODEX_UPDATE="templates/codex/skills/toolkit-update/SKILL.md.tmpl"
+CODEX_DEV="templates/codex/agents/codex-dev.toml.tmpl"
+CODEX_REVIEWER="templates/codex/agents/reviewer.toml.tmpl"
+CODEX_TESTER="templates/codex/agents/tester.toml.tmpl"
+CODEX_RULES="templates/codex/rules/pipeline.rules.tmpl"
+UPDATE="templates/claude/commands/toolkit-update.md.tmpl"
+OC_LEADER="templates/opencode/agents/leader.md.tmpl"
+OC_PLANNER="templates/opencode/agents/planner.md.tmpl"
+OC_FEATURE="templates/opencode/commands/feature.md.tmpl"
+OC_UPDATE="templates/opencode/commands/toolkit-update.md.tmpl"
+HERDR_DOC="integrations/herdr/README.md"
 
 FAIL=0
 CHECKS=0
@@ -71,8 +84,8 @@ rule "task class proposed by model, tracked with decision source" \
   'class decided by|record \*\*who decided\*\*|who decided.*agent.*human' \
   "$FEATURE" "$SYSTEM" "$FLOW"
 
-rule "session scope is one task for all sub-agents" \
-  'same task.*same session|new task.*new session' \
+rule "session scope is one task per role" \
+  'same role.*same session|another role.*its own session' \
   "$FEATURE" "$SYSTEM" "$FLOW"
 
 rule "ask before splitting a very large task" \
@@ -91,11 +104,100 @@ rule "non-actionable findings are routed, not looped" \
   'no concrete code defect|names no actionable code change|no code change could address' \
   "$FEATURE" "$SYSTEM" "$FLOW"
 
+rule "branch on the reviewer's machine-readable verdict line" \
+  'branch on that line' \
+  "$FEATURE" "$SYSTEM" "$FLOW"
+
+rule "only the lead commits, tagged with the task id" \
+  'tag the commit with the task id' \
+  "$FEATURE" "$SYSTEM" "$FLOW"
+
 rule "check the spec with a script before approval" \
   'verify-spec|check the spec with a script|spec.{0,40}structural check' \
   "$FEATURE" "$SYSTEM" "$FLOW" "$PLANNER"
 
+rule "preflight resolves configured models against the live runtime" \
+  'model.{0,100}live (server|runtime)|model id against the actual provider' \
+  "$FEATURE" "$SYSTEM" "$FLOW"
+
+rule "preflight verifies the live role permission ruleset" \
+  'live role|live.*capability ruleset' \
+  "$FEATURE" "$SYSTEM" "$FLOW"
+
+# --- Codex lead adapter -----------------------------------------------------
+rule "Codex feature skill delegates to the canonical lead flow" \
+  '\.claude/commands/feature\.md' \
+  "$CODEX_FEATURE"
+
+# shellcheck disable=SC2016 # literal backticks/quotes are intentional
+rule "Codex project instructions route feature work through the skill" \
+  'invoke the `feature` skill' \
+  "$CODEX_AGENTS"
+
+rule "Codex planner discloses its non-enforced source-write boundary" \
+  'does not enforce a narrower path-only write scope.*never modify source' \
+  "$CODEX_PLANNER"
+
+rule "Codex planner delegates to the canonical planner contract" \
+  '\.claude/agents/planner\.md' \
+  "$CODEX_PLANNER"
+
+rule "writable pipeline records are separate from skill discovery" \
+  '\.pipeline/' \
+  "$FEATURE" "$SYSTEM" "$FLOW" "$STATE" "$STATE_EX" "$PLANNER" "$CODEX_PLANNER" "$CODEX_AGENTS"
+rule "Codex planner corrections reuse the task thread" \
+  'Same task.*same planner thread' "$CODEX_FEATURE"
+rule "Codex separates workflow consent from runtime permissions" \
+  'runtime approval|runtime permission approval' "$CODEX_FEATURE" "$CODEX_AGENTS" "$CODEX_UPDATE"
+rule "Codex update permission gate covers TOML and hooks" \
+  'sandbox_mode.*approval policy/reviewer' "$UPDATE"
+rule "planner thread identity is recorded in both state contracts" \
+  'planner thread id' "$STATE" "$STATE_EX"
+rule "Codex implementer delegates to the canonical senior-dev contract" \
+  '\.claude/agents/senior-dev\.md' "$CODEX_DEV"
+rule "Codex implementer never commits" \
+  'never try to commit' "$CODEX_DEV"
+rule "Codex reviewer runs in a read-only sandbox under the canonical review contract" \
+  'sandbox_mode = "read-only".*\.opencode/agents/reviewer\.md' "$CODEX_REVIEWER"
+rule "Codex tester never records an AC outcome" \
+  'never fill or tick' "$CODEX_TESTER"
+rule "implementer vendor family decides reviewer independence, Codex included" \
+  'codex-dev.{0,200}(independent|vendor family)|(independent|vendor family).{0,200}codex-dev' "$FEATURE" "$CODEX_FEATURE"
+rule "a lead without a scheduler still retries usage limits, via a detached loop" \
+  'retry-on-limit|detached retry loop' "$FEATURE" "$FLOW" "$CODEX_FEATURE"
+rule "Codex execution rules are scoped to the dispatch wrappers and verified live" \
+  'confirm live.*still prompts' "$CODEX_RULES"
+rule "approval decisions survive restart" \
+  'Record approvals|record the approval' "$FEATURE" "$SYSTEM" "$FLOW"
+
 # --- the delivery contract --------------------------------------------------
+rule "Herdr adoption does not prompt or relaunch an existing lead" \
+  'sends \*\*no prompt\*\*.*launches \*\*no process\*\*' "$HERDR_DOC"
+rule "Herdr lifecycle completion is not task acceptance" \
+  'Herdr done/idle is not task acceptance' "$HERDR_DOC"
+rule "Herdr bindings never guess the newest worker session" \
+  'never.*choose the newest worker' "$HERDR_DOC"
+rule "Herdr role briefing does not activate runtime permissions" \
+  'not an OpenCode profile switch' "$HERDR_DOC"
+
+# OpenCode-only adapters reference policy rather than becoming new flow copies.
+rule "OpenCode leader and command reference the canonical flow" \
+  '\.claude/commands/feature\.md' "$OC_LEADER" "$OC_FEATURE"
+rule "OpenCode planner references the canonical planner contract" \
+  '\.claude/agents/planner\.md' "$OC_PLANNER"
+rule "OpenCode update references canonical reconciliation gates" \
+  '\.claude/commands/toolkit-update\.md' "$OC_LEADER" "$OC_UPDATE"
+rule "OpenCode commands select the lead in the current session" \
+  'agent: leader subagent: false' "$OC_FEATURE" "$OC_UPDATE"
+rule "OpenCode adapters require live permission verification" \
+  'verify.*permissions.*live' "$OC_LEADER" "$OC_PLANNER"
+rule "OpenCode planner cannot record AC outcomes" \
+  'never tick' "$OC_PLANNER"
+rule "OpenCode leader does not implement source" \
+  'never implement feature code' "$OC_LEADER"
+rule "OpenCode lead resume never selects an arbitrary worker" \
+  'never resume the lead with the newest worker session' "$OC_LEADER"
+
 rule "acceptance-criteria ledger closes the contract" \
   'ledger' \
   "$FEATURE" "$SYSTEM" "$FLOW" "$STATE" "$STATE_EX" "$PLANNER" "$SENIOR" "$BUILDER" "$LESSONS"
@@ -124,20 +226,20 @@ rule "a blocked task records what it waits on and since when" \
 # --- review convergence -----------------------------------------------------
 rule "a later review pass closes the earlier one by number" \
   'close every|closes the first|closes the earlier|by number' \
-  "$SYSTEM" "$FLOW" "$STATE" "$REVIEWER" "$CODEX_REVIEWER" "$SENIOR" "$BUILDER"
+  "$SYSTEM" "$FLOW" "$STATE" "$REVIEWER" "$SENIOR" "$BUILDER"
 
 rule "reviewer reads the implementer's stated reasoning" \
   'decisions log|decisions/reasoning log|reasoning log' \
-  "$REVIEWER" "$CODEX_REVIEWER" "$SYSTEM" "$FLOW"
+  "$REVIEWER" "$SYSTEM" "$FLOW"
 
 # --- independence of evidence ------------------------------------------------
 rule "tester maps criteria to covering tests" \
   'coverage|covering test' \
-  "$TESTER" "$SYSTEM" "$FLOW" "$STATE" "$STATE_EX"
+  "$TESTER" "$CODEX_TESTER" "$SYSTEM" "$FLOW" "$STATE" "$STATE_EX"
 
 rule "test authorship is recorded" \
   'tests authored by|who authored the tests|authorship' \
-  "$TESTER" "$SYSTEM" "$FLOW" "$STATE" "$STATE_EX"
+  "$TESTER" "$CODEX_TESTER" "$SYSTEM" "$FLOW" "$STATE" "$STATE_EX"
 
 # --- state-file fields present in both copies of the contract ---------------
 rule "reviewer/tester recorded per task" \

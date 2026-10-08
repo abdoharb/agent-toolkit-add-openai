@@ -1,13 +1,13 @@
 ---
 name: self-improvement
-description: Optional, off by default. Captures corrections and confirmed lessons from a lead session into the project's own durable instructions (the $feature skill, a role file, or a doc via the existing Findings-for-docs path) so future runs don't need the same correction twice. Lead-only — never loaded by a dispatched role. See README's "Optional: the self-improvement skill" for how to enable it.
+description: Optional, off by default. Captures corrections and confirmed lessons from a lead session into the project's own durable instructions (feature.md, a role file, or a doc via the existing Findings-for-docs path) so future runs don't need the same correction twice. Lead-only — never loaded by a dispatched role. See README's "Optional: the self-improvement skill" for how to enable it.
 ---
 
 # Self-improvement (optional)
 
 **Off by default.** Nothing in this toolkit loads this skill automatically
-— not the `$feature` skill, not `init.sh`. You enable it deliberately, the same way
-you'd add `delegate` or `karpathy-guidelines` to `$feature`'s own
+— not `feature.md`, not `init.sh`. You enable it deliberately, the same way
+you'd add `delegate` or `karpathy-guidelines` to `feature.md`'s own
 load-these-skills line. See README's "Optional: the self-improvement skill"
 for the exact steps.
 
@@ -41,7 +41,7 @@ specific feature is not a standing rule.
 
 1. **Say where it belongs, out loud, before writing anything:**
    - About how the lead orchestrates (dispatch order, when to stop and
-     ask, session policy) → `.agents/skills/feature/SKILL.md`.
+     ask, session policy) → `.claude/commands/feature.md`.
    - About how a specific role behaves → that role's own file.
    - About a durable fact about the project (a platform gotcha, a
      constraint, an incident) that isn't about *how the pipeline runs* →

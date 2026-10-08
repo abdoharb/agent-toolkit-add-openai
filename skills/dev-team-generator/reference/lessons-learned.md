@@ -97,6 +97,19 @@ worse than the flat timeout it was meant to improve on.
   reusing this note as precedent — the finding above is tool-and-version
   specific, not a general property of CLI tools.
 
+**Update 2026-09-10 — an idle watchdog now ships, on a different signal.**
+The output-file-growth signal above is still dead (re-confirmed on opencode
+1.18.25). But `oc.sh` no longer needs it: it polls the tool's own
+**session-state API** — `GET /session/<id>/message?limit=1`, whose
+byte-fingerprint tracks sub-turn progress and carries the `completed`
+flag — the same API §2 already trusts for abort verification. Verified
+against opencode 1.18.25 with a real multi-minute run (not false-killed) and
+a forced stall (caught). `OC_TIMEOUT` is now the ceiling, `OC_IDLE_TIMEOUT`
+(default 600 s) the wedge detector. Full write-up + test procedure:
+`docs/OC-TIMEOUT-WATCHDOG.md`. The "flat timeout is the current design"
+conclusion above held only while every candidate signal was broken — one
+wasn't.
+
 ## 4. Implementer testing: scoped to fast/deterministic, not banned, not unlimited
 
 Don't swing to either extreme:
@@ -424,16 +437,19 @@ fewest rules about removing it.
   of internal, and give the human something concrete to push back on other
   than the planner's own framing.
 
-## 21. Session scope is one task, not one sub-agent
+## 21. Session scope is one task per role
 
-When a dispatch tool supports session continuity it is tempting to give
-every dispatched role a fresh session "for independence". That trades a
-real cost for a partial benefit: a fresh reviewer/tester must re-read every
-file the implementer already read — on a large implementation that burns
-more context than the independence is worth. The rule that held up: **same
-task → same session, new task → new session, for all sub-agents alike.**
-The implementer, reviewer, and tester of one task share its single
-session; nothing carries across tasks.
+This lesson was first written the other way round — "same task → same
+session for all sub-agents alike", on the theory that a fresh reviewer or
+tester re-reading every file costs more than the independence is worth. It
+did not hold up. On opencode v2 a session pins the tool set of the agent
+that opened it: a tester dispatched into the builder's session reported
+"file-edit tool is not exposed" twice and could not record its results,
+while a fresh session wrote them first time. A shared session also handed
+the reviewer the builder's in-session reasoning instead of just the diff.
+The rule that held up: **same task and same role → same session; another
+role → its own session; new task → new sessions.** Each role's id lives in
+its own state-file field, and only that role's retry reuses it.
 
 ## 22. Track classifications with their decision source
 
@@ -450,3 +466,296 @@ a human chose it or a model guessed. Two rules kept this cheap:
   session policy, permissions, or budgets mid-task. A label that can
   silently change what a role is allowed to do is a permission system, and
   permission changes belong at gates, not in metadata.
+
+## 23. A long-lived dispatch server caches permission config
+
+A permission deny that "is in the file" is not a deny that fires. Verified
+live: an OpenCode-style server kept running for three days across edits to
+the role files; agent definitions were read at startup, so newly added
+deny rules never took effect — a `git push` deny silently didn't apply,
+while older rules (present before startup) enforced fine. The config was
+correct; the process was stale.
+
+- After editing any dispatched agent's permission block, **restart the
+  dispatch server** and re-run one negative probe before trusting it.
+- A "verified live" claim has a timestamp. Config verified last month on a
+  server that restarted yesterday is not verified.
+
+## 24. Blanket bash denies do not block the runtime's built-in safe list
+
+With `bash "*": deny` confirmed working (arbitrary commands hard-fail with
+a rule error), some commands still executed: `ls`, `git status`. The
+runtime treats certain known-read-only commands as always-permitted,
+above any configured rule. Design accordingly:
+
+- A blanket bash deny limits *damage*, not *observation*. Anything visible
+  to `ls`/`git status` should be assumed readable by every role.
+- When auditing permissions, probe with an innocuous non-safe command
+  (`whoami`, `touch /tmp/...`), not with `ls` — a passing `ls` proves
+  nothing about the deny actually being loaded.
+
+## 25. A rule the template states but the checker doesn't verify is not a rule
+
+The state-file template can say "a box may be ticked only when both
+evidence cells are filled" in plain words, every role can have read it, and
+the box still gets ticked on recollection — because the only thing that
+actually holds a pipeline to a rule is the deterministic check, and a rule
+that lives only in prose is enforced by nobody. This surfaced twice at the
+same seam: a criterion marked met with an empty evidence column, and a
+review verdict where the placeholder had been deleted but no verdict
+written (the check only looked for the *placeholder string*, so its absence
+read as "filled").
+
+- For every load-bearing rule you write into the template, ask whether the
+  structural check actually asserts it. "Ticked ⇒ both evidence cells
+  non-empty" and "past review ⇒ a filled verdict on record" are both cheap
+  greps; without them the template is documentation, not a contract.
+- Prefer checks that catch a *positive* bad state (a tick with no
+  evidence) over ones that catch a known-bad *token* (the literal
+  placeholder). The token check passes the moment someone edits the
+  placeholder out, which is exactly when you most need it to fire.
+- Give the handoff a **machine-readable form** at every seam a script or
+  the lead has to branch on. Have the reviewer open its reply with a fixed
+  `VERDICT: <PASS|CHANGES_REQUESTED>` line and branch on that line — not on
+  a scan of the findings prose or the raw event stream, both of which are
+  parseable only by eye and only unreliably.
+
+## 26. Instrument the pipeline's own cost, not just the product's
+
+It is easy to end up tracking the *product's* cost to a decimal while the
+*pipeline's* own $/min per role is invisible — knowable only when a
+timeout forces someone to open a session and look. That is how an
+expensive, slow, verdict-less reviewer model survives far longer than it
+should: nothing routinely surfaces that one dispatch cost 200x another.
+
+- Have the dispatch wrapper append one structured line per call to a log
+  the pipeline owns: timestamp, role, model, session, wall-clock seconds,
+  exit status, and — best-effort from the tool's own session API — token
+  counts and cost. One line, one file, appended on every outcome including
+  a timeout.
+- Make it strictly additive and best-effort: a failure to resolve cost or
+  write the line must never change the run's exit code. Telemetry that can
+  break the thing it measures gets disabled the first time it does.
+- Treat the log as machine state, not a committed artifact — add it to the
+  target repo's ignore file the same way the wrapper's other local state
+  (server port, session ids) is handled.
+
+## 27. Re-check a tool's discovery surface before preserving an old limitation
+
+A tool that once supported custom agents only in machine-global configuration
+may later add repository-scoped agents and skills. Treating the old limitation
+as permanent leaves a documented "manual adapter" long after the tool can be a
+first-class project lead.
+
+- Verify current official documentation before adding or rejecting support.
+- Prefer repository-scoped instructions, skills, and agents when the tool
+  discovers them; they are reviewable and travel with the project.
+- Keep one canonical workflow and make tool-specific lead entry points thin
+  adapters over it. Duplicating a long flow creates another hand-synced policy
+  surface; an adapter should name only genuine capability differences.
+- Launcher fallback should be deterministic and overridable: prefer the
+  established lead when available, fall back to the supported alternative when
+  it is absent, and provide an explicit selection flag for testing and intent.
+
+## 28. A new update entry point needs a lower-level bootstrap path
+
+A command or skill introduced by an upgrade cannot perform the upgrade that
+installs itself. Existing users of another lead may already have an update
+command, but users of the newly supported lead need one documented shell-level
+path before its project integration exists.
+
+- Keep preview and write separate: first show drift without writing, then run a
+  skip-if-exists installer that can add only missing files.
+- Persist scaffold inputs so the missing-file run does not require users to
+  reconstruct old model and directory choices.
+- Test the exact bootstrap state by removing the newly introduced files from a
+  stamped scaffold and confirming a flag-free run restores only those files,
+  preserves the stamp, and does not retrigger first-run behavior.
+
+## 29. Keep writable handoff records outside protected instruction directories
+
+A writable workspace can still contain recursively protected instruction,
+configuration, or version-control directories. A syntactically valid worker
+sandbox setting does not prove it can write the handoff there. Keep task
+records, logs, and runtime markers separate from skill/config discovery, and
+probe the real OS sandbox before relying on a path. Move every role and checker
+together at a task boundary; retain a read-only legacy baseline and refuse
+bootstrap that would silently create two runtimes.
+
+## 30. Resume exact identities, and fail when identity cannot be recovered
+
+The latest conversation in a repository is not the conversation associated
+with a particular team. Capture the runtime's authoritative session identity,
+pin it per team, and resume that exact identity. Capture through a reviewed
+lifecycle event rather than guessing from timestamps or arbitrary transcript
+files. A failed resume or a skipped/untrusted capture must stop for recovery;
+starting fresh silently loses decisions. Keep a process lock to prevent two
+leads using one pin. Worker corrections reuse the task's recorded worker thread;
+record a replacement when that thread is no longer recoverable.
+
+## 31. Workflow consent and runtime permission approval are separate controls
+
+Approval of a spec or merge is a decision about the work. It does not remove
+filesystem, network, execution-rule, or hook-trust boundaries. Check actual
+state writes and authenticated worker-runtime access before dispatching. When
+blocked, report the precise operation and request the narrow runtime approval
+it needs, rather than disabling protection. Classify permission-sensitive
+updates by behavior across every tool's schema, including hooks and TOML, not
+only by the first tool's YAML field names. Configuration/skill presence is not
+proof of discovery; fake-CLI tests are not live model workflow evidence.
+
+## 32. A compatible legacy config path is not a reliable discovery contract
+
+A runtime may document backward-compatible discovery of an old role directory
+while its live agent endpoint loads only built-ins from that project. Treat the
+current canonical project path as the contract for generated scaffolds, and
+migrate old paths explicitly at a task boundary instead of depending on a
+compatibility promise. Refuse a plain bootstrap that would create a second role
+tree beside an unmigrated first one.
+
+Likewise, configuration agreement is not runtime readiness. Before dispatch,
+resolve every configured model id against the live provider and inspect the
+live role list after a restart, upgrade, path migration, or permission change.
+A model name written consistently in three files can still be unavailable, and
+a permission file that exists on disk can still correspond to no loaded role.
+
+## 33. A structural checker that flattens nested config lies, and a scratch copy is not the artifact
+
+Two related traps surfaced while chasing a suspected permission-enforcement
+bug: a "does this key repeat?" script written against nested config
+(permission maps, frontmatter) that flattens the whole document before
+comparing keys, and a scratch-dir repro built by hand-copying the real file
+under test.
+
+- **Scope every duplicate/structural check to the mapping a key actually
+  lives in, never the whole document.** A key legitimately repeats across
+  independent sibling sections (an `edit:` permission map and a `write:`
+  map both keying `"*"`) and that is not a defect. Verified directly
+  against this toolkit's own `tester.md.tmpl`: a flattened duplicate-key
+  grep reported three "duplicates" that were each a pattern reused across
+  two unrelated sibling maps — a false positive that would send someone
+  chasing a bug that was never there.
+- **A repro must be the byte-identical real artifact, not a copy made while
+  diagnosing the issue.** Hand-copying or cleaning up a file in the course
+  of investigating it is easy to silently "fix" in the act of copying
+  (a duplicate line deduplicated, whitespace normalized) — the copy then
+  passes a check the original fails, and the result is read as "verified
+  safe" when nothing about the original was actually re-tested.
+- Combined, these two traps can produce a fully self-consistent but wrong
+  investigation: the flattening checker under-reports real defects on some
+  files and over-reports on others, while a from-scratch repro built to
+  confirm or deny a hypothesis quietly tests a different file than the one
+  in production. Treat any safety conclusion reached through either
+  shortcut as unconfirmed until re-run against the real file with a
+  structure-aware check.
+
+## 34. Direct lead support needs an adapter, not another copy of the pipeline
+
+- A tool being able to run workers does not make it a supported lead. Supply
+  its native entrypoints, a planner, approval routing, launcher/authentication,
+  and reconciliation command; do not stop at a prompt that says "act as lead."
+- Keep shared role policy in one canonical prompt and use thin adapters for
+  tool-specific metadata, dispatch, and permission semantics. A prompt file
+  named for one tool can be read by another without that tool's CLI installed.
+  Read the body as instructions; do not inherit incompatible frontmatter.
+- Do not resume "the latest session" when leads and workers use the same
+  runtime. It can silently select a worker. Resume only a known lead id, or
+  start fresh and disclose that automatic lead pinning is not implemented.
+- Long dispatches should leave the lead responsive: use background execution
+  and completion notifications when supported. Send literal prompts through
+  files, and preserve one transcript per role/pass instead of overwriting
+  earlier evidence. Runtime limitations must be disclosed, not invented away.
+- Verify the served model rather than the requested label before claiming
+  model-maker independence. A gateway name is not a model-maker identity, and
+  shared sessions can contaminate evidence even when model families differ.
+  Document the tradeoff; an adapter must not silently change session policy.
+- A downstream handoff is dated operational evidence, not a new universal
+  contract. Revalidate snapshots and resolve conflicts explicitly. Transfer
+  generalized lessons into the source toolkit, not project paths, rosters,
+  temporary quotas, or historical claims of permission safety.
+- A denied edit tool is not filesystem isolation if shell can write files.
+  Use least privilege, disclose the boundary, and verify resolved rules and
+  refused actions against the exact generated artifact in a fresh runtime.
+
+## 35. Hosting an existing lead is not launching or approving a pipeline
+
+- A terminal/workspace integration must adopt a user-started lead, not require
+  its own launcher or silently create a replacement conversation. Make layout,
+  prompting, and process launch distinct actions; adoption can be metadata-only.
+- A globally installed plugin needs runtime bindings scoped by server,
+  workspace, and project. Pane ids alone are not unique across servers. Persist
+  outside managed source checkouts and projects, and verify native session
+  identity before focusing or prompting; do not select the latest worker.
+- A host's idle/done state describes a terminal turn, not acceptance criteria.
+  Display the actual task record and keep deterministic verification and
+  evidence gates authoritative. Do not take lifecycle authority away from the
+  host's official integration merely to relabel a pane as lead.
+- Native interactive lifecycle reporting may not cover headless workers.
+  Preserve dispatch receipts and state files rather than claiming the host's
+  badges monitor processes it cannot identify. Empty support terminals must
+  not be advertised as automatic worker routing.
+- Role text is not a runtime profile or permission switch. A briefing can tell
+  an existing agent how to behave; only the runtime's real profile selection
+  can apply its configured permission block. Disclose that distinction.
+- Treat task text as untrusted terminal output: strip control characters and
+  avoid exposing external file links. Keep one-shot prompt submissions bounded
+  and never retry blindly after a timeout, since input may already have arrived.
+- Host action commands and terminal entrypoints may use different working
+  directories. Resolve entrypoint code from the host's protected package-root
+  context and pass the target project separately; test the actual manifest
+  command from a target project, not only from the plugin checkout.
+- A useful host dashboard should derive stage graphs, counts, and blocker
+  summaries deterministically from task records, independently of the current
+  model. Separate visualization from inference: unknown/blocked stages remain
+  explicit, acceptance bars are recorded data rather than verification, and a
+  responsive display cannot make stale source records fresh.
+- Placement modes may accept different API parameters: a split needs a target
+  pane while a new tab may reject it. Test placement-specific argument contracts,
+  not just successful responses from a permissive fake host.
+- Check the host's actual UI extension boundary before promising an embedded
+  graphical panel. A terminal-only plugin host can offer colored, scrollable
+  cards and graphs, but not a native webview. Preserve a plain-text fallback
+  and keep navigation read-only instead of coupling display to agent actions.
+- Keep record visualization callable without the workspace host. A standalone
+  viewer should discover the task directory from cwd, require no host session
+  context or full scaffold for reading records, and reuse the same renderer so
+  the hosted and independent views cannot drift.
+- Install the viewer as a self-contained project command and track it in the
+  same non-destructive update triage as other generated artifacts. A generated
+  launcher must not depend on the original toolkit checkout still existing;
+  additive installation must preserve customization and provenance.
+
+## 36. Lead parity is the harness, not the flow text
+
+Two leads can read the same canonical flow and still feel very different,
+because most of the friction lives in what each harness supplies around it.
+Audit those mechanics directly rather than re-reading the flow:
+
+- **Native roles on the lead's own side.** If one lead can spawn its own
+  implementer and reviewer and the other can only dispatch a remote worker,
+  the second has fewer options at every step. Give each lead native role
+  adapters that delegate to the *same* role contract file (never a second
+  copy of the rules), and make the reviewer's independence check compare the
+  implementer's vendor family, whichever lead spawned it.
+- **Prefer a runtime-enforced boundary where the runtime offers one.** A
+  read-only sandbox for the reviewer is stronger than a permission block that
+  reads correctly. Say which roles are enforced and which are disciplined.
+- **Per-call approval friction is a parity gap.** A sandboxed lead that needs
+  approval for every dispatch, status check and wait gets prompted dozens of
+  times per run. The signal is users hand-adding the same allow rules to
+  personal config. Ship a project-scoped allowlist covering only the
+  toolkit's own wrappers, effective only in a trusted project, treated as a
+  permission change on update, and verified live: wrappers run unprompted,
+  everything else still prompts. A sandbox-testing preflight must stay
+  outside that allowlist, or it stops testing the sandbox.
+- **Waiting and retrying must not depend on scheduler tools.** A lead with no
+  background-notify or scheduled-wakeup tool needs plain commands: a bounded
+  `wait` it can call again, and a detached retry loop that reruns a dispatch
+  only on a usage-limit failure (never a timeout), keeps each failed attempt
+  out of the completion signal, and caps its attempts. Learn how the lead's
+  exec tool handles a long command (killed at a timeout, or yielded and left
+  running) before writing guidance around it.
+- **Recovery should start oriented.** A session-start hook can print one line
+  per unfinished task from the state files, as a pointer the resumed lead must
+  still verify. Keep per-prompt hooks silent so they do not grow the lead's
+  context.

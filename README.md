@@ -1,10 +1,9 @@
 # agent-toolkit
 
 A reusable version of the planner → implement → review → test multi-agent
-pipeline: Codex subagents (Sol for planning/review and Terra for
-implementation), OpenCode (any vendor) for cross-vendor
-implement/review/test, a state file
-(`.agents/T-<id>.md`) as the single handoff surface between roles, and a
+pipeline: Claude, Codex, or OpenCode as the lead, matching-tool planning,
+OpenCode (any vendor) for cross-vendor implement/review/test, a state file
+(`.pipeline/T-<id>.md`) as the single handoff surface between roles, and a
 `delegate` skill so the lead's own context stays small across a long run. 
 
 It was distilled from real multi-agent pipeline runs and hardened there
@@ -12,13 +11,64 @@ over time, so the same setup — permissions, session-reuse policy,
 cross-vendor independence rules, the state-file contract — doesn't get
 re-invented and re-debugged from scratch in every new repo.
 
-**Want a different tool to run the lead itself (not just a worker role)?**
-Read `[SYSTEM.md](SYSTEM.md)` instead of this
-file — one tool-agnostic page meant to be handed to any AI ("recreate this
-system, with yourself as the lead"), pointing into `templates/` for detail
-on demand rather than requiring everything read up front.
+OpenCode is also a supported direct lead: `/feature` and `/toolkit-update`
+select a `leader` adapter, and its `planner` references the canonical role
+instructions. No Claude or Codex CLI is required; the generated `.claude/`
+files remain shared instruction sources, not executable dependencies.
+
+Codex is a supported lead: the scaffold includes project instructions,
+a `feature` skill, a `toolkit-update` skill, and a Codex planner. For any other
+lead tool, read [`SYSTEM.md`](SYSTEM.md) — one tool-agnostic page meant to be
+handed to an AI ("recreate this system, with yourself as the lead").
+
+Both leads store writable task records and runtime files in `.pipeline/`;
+Codex skills remain in `.agents/skills/`. Existing projects must apply
+[the directory migration](migrations/02-pipeline-directory.md) at a task boundary.
+See [Codex lead operation](docs/CODEX.md) for session pins, hook trust,
+permissions, recovery, and live verification.
 
 ## How it flows
+
+### Standalone visual dashboard
+
+From any project with `.pipeline/` task records, run:
+
+```bash
+./scripts/dashboard
+```
+
+Init installs this self-contained command in the project. It does not need the
+toolkit checkout to remain on disk. You can still use
+`/path/to/agent-toolkit/bin/dashboard` for projects without the installed copy.
+
+It discovers the project from your current directory (including nested folders),
+shows live pipeline boxes/task cards, and refreshes every two seconds. No Herdr,
+agent CLI, server, or model calls required. Python 3.8+ on macOS/Linux is enough.
+Use arrows or `j/k` to scroll, `b` for blocked tasks, and `q` to close.
+
+For another project or a plain-text snapshot:
+
+```bash
+./scripts/dashboard --project /path/to/project
+./scripts/dashboard --once
+```
+
+Optionally add the toolkit's `bin/` directory to your shell's `PATH` to run
+`dashboard` from any project. No project files are installed or changed. The
+standalone command shares the optional Herdr adapter's renderer; it does not
+call Herdr. Displayed progress is recorded data, not independent verification.
+
+For an existing stamped scaffold, preview the addition and then install it:
+
+```bash
+bash /path/to/agent-toolkit/bin/init.sh --update --target . --only scripts/dashboard
+bash /path/to/agent-toolkit/bin/init.sh --target .
+```
+
+The preview writes nothing (exit 1 means new/differing files). The plain run
+adds missing files only, loading the original settings from the provenance
+stamp. Future dashboard changes appear in `/toolkit-update` triage like other
+generated files; local customizations are never overwritten by a re-run.
 
 ```mermaid
 flowchart TD
@@ -28,7 +78,7 @@ flowchart TD
     Spec -- fails --> Planner
     Spec -- passes --> Approve{User approves?}
     Approve -- no or open questions --> Req
-    Approve -- yes --> Impl[Implementer<br/>builder or senior_dev]
+    Approve -- yes --> Impl[Implementer<br/>builder or senior-dev]
     Impl -- spec unbuildable, max 1 bounce --> Planner
     Impl -->|code, T-id.diff, Decisions log| Review[Reviewer]
     Review -- CHANGES_REQUESTED, max 2 loops --> Impl
@@ -42,7 +92,7 @@ flowchart TD
 
 
 Every arrow into or out of a role is really a write to, or a read from,
-`.agents/T-<id>.md` — see below.
+`.pipeline/T-<id>.md` — see below.
 
 ### Context stays small, by construction
 
@@ -50,7 +100,7 @@ Every arrow into or out of a role is really a write to, or a read from,
 sequenceDiagram
     participant Lead
     participant Role as Role (any)
-    participant File as .agents/T-id.md
+    participant File as .pipeline/T-id.md
 
     Lead->>Role: dispatch (task id, short prompt)
     Role->>File: full detail - diff, Decisions log,<br/>verdict, test results
@@ -73,17 +123,23 @@ and test log it dispatched.
 | Role                                   | Reads                  | Writes                                      | Notes                                                   |
 | -------------------------------------- | ---------------------- | ------------------------------------------- | ------------------------------------------------------- |
 | Lead                                   | state file             | the acceptance-criteria ledger, Status      | the only role that records whether a criterion was met  |
-| Planner                                | whole repo             | `.agents/T-<id>.md` only                    | never touches source; owns criteria *text*, not outcome |
-| Implementer (`senior_dev` / `builder`) | whole repo             | source + `.agents/T-<id>.diff` + state file | the only roles that edit source                         |
+| Planner                                | whole repo             | `.pipeline/T-<id>.md` only                    | never touches source; owns criteria *text*, not outcome |
+| Implementer (`senior-dev` / `builder`) | whole repo             | source + `.pipeline/T-<id>.diff` + state file | the only roles that edit source                         |
 | Reviewer                               | whole repo (read-only) | state file only, or nothing — see below     | blanket `edit`/`write: deny` by default in this toolkit |
 | Tester                                 | whole repo (read-only) | `<test-dir>/**` + state file only           | never fixes, only reports                               |
 
 
 The reviewer template ships **safer than it has to be** — blanket deny, not
-scoped-allow on `.agents/**` — because a permission block that reads
+scoped-allow on `.pipeline/**` — because a permission block that reads
 correctly in YAML isn't proof it's enforced by the runtime. Loosen it only
 after verifying that live against your own OpenCode server (see "Design
 decisions" below).
+
+Codex's planner uses a `workspace-write` sandbox because it must create the
+state file. That sandbox does not scope writes to `.pipeline/**` alone, so its
+source-read-only boundary is explicit role instruction rather than filesystem
+enforcement. This limitation is stated in the generated planner file rather
+than hidden.
 
 ## What's in it
 
@@ -101,21 +157,29 @@ test/invariants.sh    asserts every load-bearing rule is present in each of the
 CHANGELOG.md          impact-tagged per-release changes ([contract] › [safety]
                       › [process] › [docs]) — read this before merging an update
 migrations/           hand-appliable notes for [contract] changes only
+integrations/herdr/   optional plugin: adopt an existing lead, show task records,
+                       and add support panes without requiring team.sh
 templates/             every generated file, with __PLACEHOLDER__ tokens
-  codex/config.toml.tmpl  project lead = Sol; custom agents enabled
-  codex/agents/         planner.toml.tmpl (Sol), senior-dev.toml.tmpl (Terra),
-                          reviewer-fallback.toml.tmpl (Sol)
-  codex/skills/         feature/SKILL.md.tmpl — the $feature pipeline skill;
-                          toolkit-update/SKILL.md.tmpl — the $toolkit-update merge skill
-  opencode/agent/        builder.md.tmpl, reviewer.md.tmpl, tester.md.tmpl
+  claude/agents/        planner.md.tmpl, senior-dev.md.tmpl
+  claude/commands/      feature.md.tmpl — the /feature pipeline command;
+                          toolkit-update.md.tmpl — the /toolkit-update merge command
+  codex/                AGENTS.md.tmpl, project-scoped planner and codex-dev
+                          (implementer) agents, optional read-only reviewer and
+                          tester agents, reviewed lifecycle hooks, execution rules
+                          for the dispatch wrappers, and feature/toolkit-update skills
+  opencode/agents/       builder, reviewer, tester (workers); leader, planner —
+                          native V2 lead adapters
+  opencode/commands/     feature.md.tmpl, toolkit-update.md.tmpl — direct lead commands
   agents-state/          TEMPLATE.md.tmpl — the T-<id> state file shape
-  scripts/                oc.sh.tmpl (OpenCode CLI wrapper), team.sh.tmpl (tmux
+  scripts/                oc.sh.tmpl (OpenCode CLI wrapper), Codex launcher/preflight,
+                          team.sh.tmpl (tmux
                           layout — resumes the lead by default, --port for
                           running a second project at once, see docs/TEAM.md),
                           team-completion.bash.tmpl (optional shell completion
                           for team.sh), verify-state.sh.tmpl (structural check on
                           a task's state file — no LLM call), verify-spec.sh.tmpl
                           (the same, on a spec, before the human approves it),
+                          verify-models.sh.tmpl (authenticated live model check),
                           promote-findings.sh.tmpl
                           (copies tagged findings into project docs — no LLM
                           call, no agent write access to docs/)
@@ -140,14 +204,14 @@ skills/
                           per-task state files — independent of init.sh
   karpathy-guidelines/    behavioral defaults (surface assumptions, minimum
     SKILL.md              code, surgical changes, verifiable success
-                          criteria) — loaded by the lead via `$feature`,
+                          criteria) — loaded by the lead via feature.md,
                           same as delegate. Not given to senior-dev/builder:
                           they'd need Skill-tool access to load it (a bigger
                           grant than either role needs), so the same content
                           is inlined directly into each of their own files
                           instead
   self-improvement/       optional, off by default — not loaded by
-    SKILL.md               the `$feature` skill like the others; see "Optional:
+    SKILL.md               feature.md.tmpl like the others; see "Optional:
                           the self-improvement skill" for how to enable it
 ```
 
@@ -164,48 +228,107 @@ opencode models          # see what's actually configured before picking models
 ~/tools/agent-toolkit/bin/init.sh \
   --target . \
   --project-name "my-project" \
-  --builder-model "hcnsec/auto" \
-  --reviewer-model "hcnsec/Kimi-K3" \
-  --tester-model "hcnsec/auto" \
-  --codex-sol-model gpt-5.6-sol \
-  --codex-terra-model gpt-5.6-terra \
   --test-dir e2e
 ```
 
-`--reviewer-model` should be a different model family from the builder.
-When that is impossible for a task, the pipeline switches to the generated
-Codex Sol `reviewer_fallback` agent so review remains independent. The
-`hcnsec/auto` builder value above is flag *shape* only — run `opencode
-models`, pin real strings, and never use `auto` for the reviewer.
+`--project-name` is the only required flag. `--claude-model`,
+`--builder-model`, `--reviewer-model`, `--reviewer-fallback-model`, and
+`--tester-model` all default to the lineup two independent real projects
+converged on: Claude Sonnet lead/planner, `opencode-go/glm-5.3-flash`
+builder, `opencode-go/minimax-m2.7` reviewer,
+`opencode-go/deepseek-v4-flash` reviewer fallback, `hcnsec/auto` tester.
+Override any of them per project once `opencode models` shows your server's
+actual list differs — these are a starting point, not a guarantee those
+exact ids still exist for you:
 
-Cost/quality picks (Kimi implementer, GLM reviewer, DeepSeek Flash tester,
-Codex Sol lead/planner/fallback review, and Codex Terra implementation),
-and why one OpenCode aggregator plus Codex is better than a new toolkit
-tool per lab: see
+```bash
+~/tools/agent-toolkit/bin/init.sh \
+  --target . \
+  --project-name "my-project" \
+  --builder-model "<vendor/model>" \
+  --reviewer-model "<vendor/model, different family than builder>" \
+  --reviewer-fallback-model "<vendor/model, different family again>" \
+  --tester-model "<vendor/model>"
+```
+
+`--reviewer-model` and `--reviewer-fallback-model` should be **different
+model families** — the fallback is what the pipeline switches to when
+`builder` implements and would otherwise share a vendor with the default
+reviewer, which would defeat cross-vendor independence. Do not use `auto`
+for the reviewer.
+
+Cost/quality picks (Kimi implementer, GLM reviewer, DeepSeek Flash
+tester, Claude Sonnet lead/planner/fallback), and why one OpenCode
+aggregator plus Claude is better than a new toolkit tool per lab: see
 [`docs/MODELS.md`](docs/MODELS.md).
 
 `init.sh` never overwrites a file that already exists in the target — it
 prints `skip (exists)` and leaves it alone, so re-running is safe and an
-existing project's customizations survive.
+existing project's customizations survive. Once a project has a provenance
+stamp, a plain `bin/init.sh --target .` re-run is flag-free too: it loads the
+original values from the stamp and writes only files a newer toolkit added.
 
 `init.sh --update` never writes anything either — it renders the current
 templates into a temp file and compares each one against what's already in
 `--target`, printing a drift **summary** first (`exit 0` = clean, `exit 1`
 = something to merge; full hunks behind `--diff`, one file via
 `--only <path>`). On any scaffold after v0.3.0, flags default from
-`.agents/.toolkit-version` — the provenance stamp written at init — so
+`.pipeline/.toolkit-version` — the provenance stamp written at init — so
 usually just `--update --target .` is needed. Merge deliberately (or run
-the generated `$toolkit-update` skill and let your lead reconcile,
+the generated `/toolkit-update` command and let your lead reconcile,
 triaging against the impact-tagged `CHANGELOG.md`), then refresh the
 baseline: `bin/init.sh --refresh-stamp --target .`. Full workflow:
 [`docs/UPGRADING.md`](docs/UPGRADING.md).
 
+For existing scaffolds whose runtime is still under `.agents/`, triage reads
+the legacy stamp there. Apply [migration 02](migrations/02-pipeline-directory.md)
+before the plain missing-file bootstrap; it otherwise refuses to split the
+runtime between two directories.
+
+### OpenCode-only lead
+
+After scaffolding a target project, start OpenCode normally:
+
+```bash
+opencode
+# or
+scripts/team.sh --lead opencode
+```
+
+Ask it to act as the toolkit leader and read `.opencode/agents/leader.md`, or
+choose your model and run `/feature <request>` or
+`/toolkit-update`. These commands select `leader` in the current session; the
+planner runs as an OpenCode child agent, and builder/reviewer/tester still use
+`scripts/oc.sh`. No Claude or Codex CLI is required. The `.claude/` prompt
+files are deliberately retained as the shared source of role policy.
+
+`scripts/team.sh --lead opencode` is an optional tmux launcher, not a prerequisite
+for acting as leader. For Herdr, the optional
+[`integrations/herdr/`](integrations/herdr/README.md) plugin adopts your existing
+agent without relaunching it. It offers an optional briefing, task board, and
+support-pane layout; no launcher script is required.
+
+Without tmux, start `opencode serve` with a configured password, export that
+password as `OPENCODE_PASSWORD`, and connect using `opencode --server <url>`.
+Set `OC_SERVER` to that same URL for worker calls (or use the port/password files
+written by `team.sh`). Do not start the lead with `--auto`.
+
+OpenCode starts a fresh lead chat by default; `--continue` might resume a worker
+instead. To resume a known lead explicitly, set `TEAM_OPENCODE_SESSION=ses_...`
+when launching `team.sh`. `--fresh` ignores it. This does not change the
+canonical per-role worker-session policy. Verify live agent discovery and denied actions before trusting
+permission controls; the smoke suite does not make that guarantee.
+
+For an already-stamped project, a plain `bin/init.sh --target <project>` adds
+the four missing OpenCode files without overwriting existing files. Use
+`--update` first to triage related changes to the root instructions and launcher.
+
 ### Updating a project scaffolded before v0.3.0
 
-Older scaffolds have no `.agents/.toolkit-version` stamp. One-time
+These scaffolds have no provenance stamp at either location. One-time
 migration — in the *target* project:
 
-`$toolkit-update` doesn't exist in the target yet at this point (step 3
+`/toolkit-update` doesn't exist in the target yet at this point (step 3
 below is what adds it) — so this first pass has to be done by hand,
 against the *toolkit checkout*, not the target's own commands:
 
@@ -217,48 +340,99 @@ against the *toolkit checkout*, not the target's own commands:
    `bin/init.sh --update --target <path-to-project>`. With no stamp it
    recovers the original init values from the target's own scaffolded
    files and prints them for you to verify — pass a flag explicitly only
-   if one couldn't be recovered. This prints the drift summary and
+   if one couldn't be recovered (a project that customized its reviewer
+   selection past the standard single-model-plus-fallback shape will need
+   `--reviewer-fallback-model` by hand). This prints the drift summary and
    **doesn't write anything yet**. Before merging, check
-   `.agents/T-*.md` for any `Status:` that isn't `done` — merge at a task
+   `.pipeline/T-*.md` and legacy `.agents/T-*.md` for any `Status:` that isn't `done` — merge at a task
    boundary, not mid-flight.
+   Apply migration 02 before the next step if runtime files still live under
+   `.agents/`; keep the recovered flags for the first bootstrap.
 3. Run the **same command again with the same flags, minus `--update`**
    (i.e. plain `bin/init.sh --target <path> --project-name ... [...]`) —
    skip-if-exists makes this safe. This is what actually adds the files
-   your scaffold predates (`.agents/skills/toolkit-update/SKILL.md`,
+   your scaffold predates (`.claude/commands/toolkit-update.md`,
    `scripts/verify-spec.sh`); it is **not** flag-free the way a re-run
    against an already-current project is — you still need the values from
    step 2, because this run doesn't attempt recovery itself.
 4. Merge in `CHANGELOG.md` impact order. Coming from ≤ v0.2.x also apply
-   `migrations/01-delivery-contract.md` to `.agents/TEMPLATE.md` and any
-   in-flight `.agents/T-*.md` (bare `blocked` still validates; nothing
+   `migrations/01-delivery-contract.md` to `.pipeline/TEMPLATE.md` and any
+   in-flight `.pipeline/T-*.md` (bare `blocked` still validates; nothing
    breaks if you skip it — you just don't get the new guarantees).
 5. Create the baseline: `bin/init.sh --refresh-stamp --target <path>`
    (same flags again).
 
-Every later update is then just: pull the toolkit → open the target repo
-→ `$toolkit-update` → done.
+Every later update is then just: pull the toolkit → open the target repo →
+`/toolkit-update` (Claude) or `$toolkit-update` (Codex) → done.
+
+### Adding Codex support to an existing scaffold
+
+If the project already has `/toolkit-update`, its Claude lead can run that
+command after pulling the toolkit checkout. The command reports the new Codex
+files, and its plain `bin/init.sh --target .` step adds them without overwriting
+existing files.
+
+A Codex-only user on an older scaffold does not have `$toolkit-update` yet, so
+that skill cannot bootstrap itself. After pulling the toolkit checkout, run:
+
+Apply migration 02 between the two commands when `.agents/` contains the old
+runtime. Existing hooks and project instructions require a deliberate merge.
+
+```bash
+<toolkit-checkout>/bin/init.sh --update --target <project>  # preview only
+<toolkit-checkout>/bin/init.sh --target <project>           # add missing files only
+```
+
+For a stamped project the second command loads all original values from
+`.pipeline/.toolkit-version`. It installs the Codex skill and planner without
+touching customized files; then open Codex and run `$toolkit-update` to
+reconcile any reported changes to files that already existed. For a pre-v0.3.0
+project with no stamp, follow the flag-recovery procedure above and pass those
+values to the plain init command once.
 
 ## Using it
 
-The pipeline is a repository skill, not a separate program. Once scaffolded,
-open Codex in the target repo and run:
+The pipeline is a slash command, not a separate program. Once scaffolded,
+open Claude Code in the target repo and run:
+
+```
+/feature <describe the feature or bug you want fixed>
+```
+
+That runs the generated `.claude/commands/feature.md` — the lead reads it,
+dispatches `planner` first, and walks the flow in "How it flows" above.
+
+To use Codex, start `scripts/team.sh --lead codex` (or open Codex directly),
+review/trust the session capture hooks with `/hooks`, then invoke:
 
 ```
 $feature <describe the feature or bug you want fixed>
 ```
 
-That loads the generated `.agents/skills/feature/SKILL.md` — the lead reads it,
-dispatches `planner` first, and walks the flow in "How it flows" above.
+Codex discovers the generated root `AGENTS.md`, the repository-scoped skill at
+`.agents/skills/feature/SKILL.md`, and the planner at
+`.codex/agents/planner.toml`. The skill reads the same canonical feature flow,
+but uses the Codex planner, and the OpenCode builder or (on request) the
+Codex `codex-dev` implementer, instead of Claude roles. A `codex/<model>`
+reviewer or tester runs as a native Codex subagent.
+`scripts/team.sh` makes this choice automatically: Claude when installed,
+otherwise Codex. Override it with `--lead claude` or `--lead codex`.
+The supporting skills are installed under `.agents/skills/`. The generated
+Codex preflight checks writes and authenticated API access from the active
+sandbox; see [the Codex guide](docs/CODEX.md) for required capability checks.
 Two things need to be true first:
 
 - `opencode serve` must be reachable — `scripts/team.sh` starts it in a
 tmux layout (and resumes the lead's own conversation by default — see
 [`docs/TEAM.md`](docs/TEAM.md) for that and for running a second project
-at the same time), or run `opencode serve` yourself. `$feature`'s own
+at the same time), or run `opencode serve` yourself. `feature.md`'s own
 Preflight step checks this (`curl -sS -m 5 http://localhost:4096`) and
 tells you to start it if it isn't running.
-- The target project needs its own `AGENTS.md`. Every
-generated role file defers project-specific constraints to it (see
+- The target project needs its own project-specific guidance in `CLAUDE.md` or
+  `AGENTS.md`. The generated `AGENTS.md` is an integration entry point with an
+  explicitly unpopulated project-guidance section; it does not satisfy this
+  requirement until customized. Every generated role file defers
+  project-specific constraints to it (see
 "Design decisions" below) — without one, a role has nothing binding it
 beyond this toolkit's generic rules.
 
@@ -267,12 +441,13 @@ trusting the loop unattended, in particular the reviewer's permission
 block — verify it's actually enforced against your real OpenCode server,
 not just correct-looking YAML.
 
-The first `$feature` run on a freshly-scaffolded project also asks, once,
+The first `/feature` run on a freshly-scaffolded project also asks, once,
 whether to fill the generated role files' generic "what this codebase will
 punish you for" sections with real specifics from your actual codebase —
-gated by a `.agents/.needs-customization` marker that `init.sh` drops only
+gated by a `.pipeline/.needs-customization` marker that `init.sh` drops only
 on a genuinely fresh scaffold, deleted the moment it's asked either way.
-See `templates/codex/skills/feature/SKILL.md.tmpl`'s Preflight step 1.
+See `feature.md.tmpl`'s Preflight step 1; the Codex feature skill executes the
+same check.
 
 ## Design decisions, and why
 
@@ -284,8 +459,8 @@ See `templates/codex/skills/feature/SKILL.md.tmpl`'s Preflight step 1.
   macOS via `brew install coreutils` (`oc.sh`), and `tmux` if you use
   `scripts/team.sh`.
 - **Project-specific constraints are never duplicated into the templates.**
-Every generated agent file says "read this project's own `AGENTS.md`
-first" rather than trying to guess or hardcode what a given
+Every generated agent file says "read this project's own `CLAUDE.md` /
+`AGENTS.md` first" rather than trying to guess or hardcode what a given
 project cares about (security posture, banned patterns, style). The
 toolkit owns the *process*; each project's own guidance file owns the
 *content*.
@@ -297,13 +472,14 @@ exactly how to verify before loosening it (dispatch the agent, try to
 make it edit a source file, confirm it's refused). Do not trust "the
 reviewer can't touch source" without having run that check once against
 your actual OpenCode server.
-- **Session reuse (implement → review → test in one OpenCode session) is
-documented as a real tradeoff, not a free win.** It saves reload cost but
-feeds the reviewer the implementer's full read/edit trace, which can be
-larger than the diff it's meant to review. Measure it before assuming
-it's cheaper.
-- **Each role's file is self-contained, one full copy per tool — not a
-canonical file with thin per-tool shims.** `senior_dev` (Codex Terra) and
+- **One OpenCode session per role per task, not one per task.** Sharing one
+session across implement, review and test was the earlier policy; it fed
+the reviewer the implementer's full trace instead of the diff, and on
+opencode v2 it left the tester without file-edit tools (a session pins the
+opening agent's tool set). A retry still reuses its own role's session.
+- **Implementation/review/test role files are self-contained, one full copy
+per tool — not a
+canonical file with thin per-tool shims.** `senior-dev` (Claude) and
 `builder` (OpenCode) do the identical job for two different vendors, and
 yes, their prose is duplicated by hand. A shared-file-plus-shim version was
 tried and reverted: it meant an extra file open before a role could do
@@ -317,6 +493,14 @@ occasional cost each time behavior actually changes, not a permanent
 runtime cost every dispatch pays. See `docs/ADDING-A-TOOL.md` for the
 recipe to follow **at the point a role genuinely needs a second or third
 tool** — extract to a shared file then, not preemptively.
+
+  Codex lead support is deliberately different: its `feature` skill and
+  planner TOML are short, tool-required adapters that read the canonical
+  Claude feature/planner files. They contain only Codex-specific dispatch and
+  capability differences. Duplicating the 500-line lead flow and full planner
+  contract would add policy copies, not independent worker behavior;
+  `test/invariants.sh` verifies both adapters still point at their canonical
+  files.
 
 
 
@@ -357,13 +541,13 @@ rule: update the top-level status board (one row per active task: id,
 title, live `Status:`, which longer-term checklist item it maps to) at the
 end of every pipeline step, and only check off a longer-term checklist box
 once a task's `Status:` actually reaches its terminal "done" value, not
-when review merely passes or implementation merely finishes. `$feature`'s
+when review merely passes or implementation merely finishes. `feature.md`'s
 step 5 points at it; load it explicitly for it to apply to every step, not
 only the last one.
 
 ## Optional: the `self-improvement` skill (off by default)
 
-Not loaded by anything in this toolkit automatically — the `$feature` skill
+Not loaded by anything in this toolkit automatically — `feature.md.tmpl`
 does not reference it the way it does `delegate` and `karpathy-guidelines`.
 That's deliberate: it edits the **lead's own instructions** in response to
 something you say mid-session, and self-modifying prompts are a real risk
@@ -371,7 +555,7 @@ category worth an explicit opt-in, not a default.
 
 What it does: watches for you correcting the lead's *orchestration* (not a
 role's code — that's the reviewer's job) or confirming an unusual approach
-worked, and writes the durable version of that lesson into `$feature` or
+worked, and writes the durable version of that lesson into `feature.md` or
 the relevant role file — a sentence, not a rewrite — so a future run
 doesn't need the same correction twice. It reuses *Findings for docs* +
 `promote-findings.sh` for anything that's a project fact rather than a
@@ -381,9 +565,11 @@ mechanism. Full behavior and guardrails: `skills/self-improvement/ SKILL.md`.
 **To enable it in a project:**
 
 1. Copy the file in:
-  `cp -R /path/to/agent-toolkit/skills/self-improvement .agents/skills/self-improvement`
-   (the repository skill location Codex discovers).
-2. Add one line to that project's own `.agents/skills/feature/SKILL.md`, next
+  `cp /path/to/agent-toolkit/skills/self-improvement/SKILL.md .claude/skills/self-improvement/SKILL.md`
+   (or wherever your tool discovers skills from — same as `delegate` and
+   `karpathy-guidelines`). The three supporting skills are scaffolded under
+   `.agents/skills/`; `self-improvement` remains opt-in and is not installed.
+2. Add one line to that project's own `.claude/commands/feature.md`, next
   to the existing `delegate`/`karpathy-guidelines` line: `If the  "self-improvement" skill is available, load it now.`
 3. Read the guardrails in the skill file once before relying on it — it's
   scoped to be conservative (records constraints, never loosens them;
@@ -406,13 +592,13 @@ of N. You can hand that file to an AI directly ("follow
 docs/ADDING-A-TOOL.md to add `<tool>` support for `<role>`") and it has
 enough to act on without re-deriving the pattern from scratch.
 
-That recipe is for porting a *worker* role to a new tool. If you want a
-*different AI to be the lead itself*, see `[SYSTEM.md](SYSTEM.md)` instead
-— a single tool-agnostic file meant to be handed directly to that AI,
-rather than something `init.sh` generates for it.
+That recipe is for porting a *worker* role to a new tool. Claude and Codex lead
+entry points are generated by `init.sh`; for any other lead AI, use
+[`SYSTEM.md`](SYSTEM.md), the tool-agnostic file meant to be handed directly to
+that AI.
 
 If most or all of the roles need a tool `init.sh` doesn't template — not
-just one role under an otherwise Codex+OpenCode setup —
+just one role under an otherwise Claude+OpenCode setup —
 `skills/dev-team-generator/SKILL.md` runs this same research-then-write recipe as its default path
 instead of an escape hatch, and does it self-contained (no dependency on
 this repo's own `docs/`/`templates/`), so it also works handed to another
@@ -420,17 +606,22 @@ project on its own.
 
 ## Known gaps
 
+- Codex launcher/hooks/preflight have no-model behavioral coverage, and an
+  opt-in real sandbox check. Custom planner discovery and the full model-driven
+  workflow remain manual checks in [docs/CODEX.md](docs/CODEX.md).
 - `test/smoke.sh` covers the scaffolder's core guarantees (placeholder
   substitution, never-clobber on re-run, `--update` diffing, the
   findings-path traversal guard, the loop-cap and budget checks, the
-  refusal to mark a task `done` on an open acceptance criterion, and
-  `verify-spec.sh`'s three cases), and `test/invariants.sh` covers rule
-  presence across the hand-synced copies — but nothing yet runs a *live*
-  pipeline end to end against a real OpenCode server. **Permission
+  refusal to mark a task `done` on an open acceptance criterion or on a
+  ticked ledger row that cites no evidence, the refusal to pass a task
+  past review with no filled verdict, and `verify-spec.sh`'s three
+  cases), and `test/invariants.sh` covers rule presence across the
+  hand-synced copies — but nothing yet runs a *live* pipeline end to end
+  against a real OpenCode server. **Permission
   enforcement in particular still needs the manual verification described
   under "Design decisions", and remains the single biggest unverified
   assumption in this toolkit.**
-- The checks are structural by design. They can tell you a spec is
+- The spec/state checks are structural by design. They can tell you a spec is
   unfinished, a budget is blown, or a criterion was closed without
   evidence; they cannot tell you the spec is *wrong* or the evidence is
   *good*. That judgement is still the reviewer's, the tester's, and yours
@@ -444,7 +635,7 @@ project on its own.
 - [`docs/UPGRADING.md`](docs/UPGRADING.md) — how an already-scaffolded
   project stays current with this toolkit: the provenance stamp, the
   impact-tagged `CHANGELOG.md`, `--update`'s triage mode, `migrations/`,
-  and `$toolkit-update`. See "Updating a project" above for the commands;
+  and `/toolkit-update`. See "Updating a project" above for the commands;
   this file is the reasoning behind them.
 - [`REVIEW.md`](REVIEW.md) / [`REVIEW-2.md`](REVIEW-2.md) — point-in-time
   honest reviews of this toolkit's own design, kept rather than deleted so
